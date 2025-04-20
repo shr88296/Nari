@@ -2,7 +2,7 @@ import typing as tp
 
 import torch
 
-from config import DataConfig
+from .config import DataConfig
 
 
 def build_delay_indices(B: int, T: int, C: int, delay_pattern: tp.List[int]) -> tp.Tuple[torch.Tensor, torch.Tensor]:

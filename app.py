@@ -10,7 +10,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from inference import (
+from nari_tts.inference import (
     codebook_to_audio,
     generate,
     load_model_and_config,
@@ -329,7 +329,7 @@ with gr.Blocks(css=css) as demo:
                     label="CFG Scale (Guidance Strength)",
                     minimum=1.0,
                     maximum=10.0,
-                    value=3.0,  # Default from inference.py
+                    value=4.0,  # Default from inference.py
                     step=0.1,
                     info="Higher values increase adherence to the text prompt.",
                 )
@@ -337,7 +337,7 @@ with gr.Blocks(css=css) as demo:
                     label="Temperature (Randomness)",
                     minimum=0.1,
                     maximum=1.5,
-                    value=1.0,  # Default from inference.py
+                    value=1.2,  # Default from inference.py
                     step=0.05,
                     info="Lower values make the output more deterministic, higher values increase randomness.",
                 )
@@ -345,7 +345,7 @@ with gr.Blocks(css=css) as demo:
                     label="Top P (Nucleus Sampling)",
                     minimum=0.80,
                     maximum=1.0,
-                    value=0.98,  # Default from inference.py
+                    value=0.95,  # Default from inference.py
                     step=0.01,
                     info="Filters vocabulary to the most likely tokens cumulatively reaching probability P.",
                 )

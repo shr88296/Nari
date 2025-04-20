@@ -10,9 +10,9 @@ import soundfile as sf
 import torch
 import torchaudio
 
-from config import NariConfig, load_config
-from dac_utils import audio_to_codebook, codebook_to_audio
-from model import KVCache, Nari
+from .config import NariConfig, load_config
+from .dac_utils import audio_to_codebook, codebook_to_audio
+from .model import KVCache, Nari
 
 
 def load_model_and_config(config_path: Path, checkpoint_path: Path, device: torch.device) -> Tuple[Nari, NariConfig]:
@@ -298,7 +298,7 @@ def generate(
     if use_torch_compile:
         decode_step = torch.compile(
             model.decoder.decode_step,
-            mode="reduce-overhead",
+            mode="default",
         )
 
     tgt_padding_mask = (generated_BxTxC[:, -1, :].unsqueeze(1) != audio_pad_value).any(dim=2).to(device)  # [B, 1]
@@ -403,7 +403,7 @@ def generate(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="./config.json")
-    parser.add_argument("--checkpoint", type=str, default="./nari_v0.pth")
+    parser.add_argument("--checkpoint", type=str, default="./weights.pth")
     parser.add_argument("--txt_file", type=str, default="./example.txt")
     parser.add_argument("--output_path", type=str, default="./example_compiled.mp3")
     parser.add_argument("--max_tokens", type=int, default=2600)
@@ -412,7 +412,7 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0.95)
     parser.add_argument("--use_cfg_filter", type=bool, default=True)
     parser.add_argument("--cfg_filter_top_k", type=int, default=50)
-    parser.add_argument("--use_torch_compile", type=bool, default=True)
+    parser.add_argument("--use_torch_compile", type=bool, default=False)
     parser.add_argument(
         "--audio_prompt",
         type=str,

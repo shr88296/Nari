@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn import RMSNorm
 
-from config import NariConfig
+from .config import NariConfig
 
 
 def _canonicalize_tuple(x: Union[Iterable[int], int]) -> Tuple[int, ...]:
@@ -187,7 +187,6 @@ class MlpBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout_rate)
 
-        # Output layer using DenseGeneral
         self.wo = DenseGeneral(
             in_shapes=(intermediate_dim,),
             out_features=embed_dim,

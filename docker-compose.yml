@@ -1,0 +1,34 @@
+services:
+  nari_tts_app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    image: nari-tts-app:latest # Tag the image
+    container_name: nari_tts_gradio
+    ports:
+      - \"7860:7860\" # Map host port 7860 to container port 7860
+    volumes:
+      # Mount Hugging Face cache directory (optional, for persistence across runs)
+      # Adjust the host path ~/.cache/huggingface as needed
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      # Mount local model cache (optional, if using local paths and want persistence)
+      # - ./models:/app/models # Example if models were in ./models
+    environment:
+      # Set environment variables if needed by the application
+      # Example: HF_HOME=/root/.cache/huggingface
+      # Example: GRADIO_SERVER_NAME=0.0.0.0 # Already handled by Dockerfile CMD/entrypoint args
+      HF_HUB_ENABLE_HF_TRANSFER: \"1\" # Use hf_transfer for faster downloads
+    # Add command arguments for the app, e.g., specifying the repo-id
+    command: [ \"--repo-id\", \"buttercrab/nari-tts\", \"--server-name\", \"0.0.0.0\" ]
+    # Optional: Add resource limits
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 8G
+    #     reservations:
+    #       # Example: Reserve GPU access if needed and configured with Docker
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu] 
