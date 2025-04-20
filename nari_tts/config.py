@@ -1,19 +1,19 @@
 """Configuration management module for the Nari model.
 
 This module provides comprehensive configuration management for the Nari model,
-including model architecture settings, training parameters, and checkpoint handling.
-It uses Pydantic for robust validation and type checking of all configuration parameters.
+utilizing Pydantic for validation. It defines configurations for data processing,
+model architecture (encoder and decoder), and training settings.
 
 Key components:
-- Model configuration (architecture, dimensions, vocabulary)
-- Training hyperparameters
-- Data loading settings
-- Checkpoint management
-- File paths and metadata handling
+- DataConfig: Parameters for data loading and preprocessing.
+- EncoderConfig: Architecture details for the encoder module.
+- DecoderConfig: Architecture details for the decoder module.
+- ModelConfig: Combined model architecture settings.
+- TrainingConfig: Training hyperparameters and settings.
+- NariConfig: Master configuration combining all components.
 """
 
 import pathlib
-from datetime import datetime
 from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator, Field
@@ -22,18 +22,15 @@ from pydantic import BaseModel, BeforeValidator, Field
 class DataConfig(BaseModel, frozen=True):
     """Configuration for data loading and preprocessing.
 
-    Controls batch sizes, sequence lengths, and data processing parameters
-    for both audio and text modalities.
-
     Attributes:
-        text_length: Maximum length of text sequences, must be multiple of 128
-        audio_length: Maximum length of audio sequences, must be multiple of 128
-        channels: Number of audio channels
-        text_pad_value: Value used for padding text sequences
-        audio_eos_value: Value used for end of audio sequences
-        audio_bos_value: Value used for beginning of audio sequences
-        audio_pad_value: Value used for padding audio sequences
-        delay_pattern: List of delay values for each channel
+        text_length: Maximum length of text sequences (must be multiple of 128).
+        audio_length: Maximum length of audio sequences (must be multiple of 128).
+        channels: Number of audio channels.
+        text_pad_value: Value used for padding text sequences.
+        audio_eos_value: Value representing the end of audio sequences.
+        audio_bos_value: Value representing the beginning of audio sequences.
+        audio_pad_value: Value used for padding audio sequences.
+        delay_pattern: List of delay values for each audio channel.
     """
 
     text_length: Annotated[int, BeforeValidator(lambda x: (x + 127) // 128 * 128)] = Field(gt=0, multiple_of=128)
@@ -46,11 +43,7 @@ class DataConfig(BaseModel, frozen=True):
     delay_pattern: list[Annotated[int, Field(ge=0)]] = Field(default_factory=lambda: [0, 8, 9, 10, 11, 12, 13, 14, 15])
 
     def __hash__(self) -> int:
-        """Generate a hash based on all fields of the config.
-
-        Since the class is frozen, we can safely hash all fields.
-        For the delay_pattern list, we convert it to a tuple since lists are not hashable.
-        """
+        """Generate a hash based on all fields of the config."""
         return hash(
             (
                 self.text_length,
@@ -60,7 +53,7 @@ class DataConfig(BaseModel, frozen=True):
                 self.audio_pad_value,
                 self.audio_bos_value,
                 self.audio_eos_value,
-                tuple(self.delay_pattern),  # Convert list to tuple for hashing
+                tuple(self.delay_pattern),
             )
         )
 
@@ -68,17 +61,14 @@ class DataConfig(BaseModel, frozen=True):
 class EncoderConfig(BaseModel, frozen=True):
     """Configuration for the encoder component of the Nari model.
 
-    Defines the architecture and dimensions of the encoder, including
-    attention mechanisms and layer specifications.
-
     Attributes:
-        n_layer: Number of transformer layers
-        n_embd: Embedding dimension, must be divisible by n_head
-        n_hidden: Hidden dimension, must be divisible by n_embd
-        n_head: Number of attention heads
-        head_dim: Dimension per attention head (computed automatically)
-        mlp_activations: List of activation functions for the MLP
-        use_pre_norm: Whether to use pre-normalization
+        n_layer: Number of transformer layers.
+        n_embd: Embedding dimension.
+        n_hidden: Hidden dimension size in the MLP layers.
+        n_head: Number of attention heads.
+        head_dim: Dimension per attention head.
+        mlp_activations: List of activation functions for the MLP layers.
+        use_pre_norm: Whether to use pre-normalization (LayerNorm before attention/MLP).
     """
 
     n_layer: int = Field(gt=0)
@@ -93,18 +83,17 @@ class EncoderConfig(BaseModel, frozen=True):
 class DecoderConfig(BaseModel, frozen=True):
     """Configuration for the decoder component of the Nari model.
 
-    Defines the architecture and dimensions of the decoder, including
-    grouped-query attention (GQA) and cross-attention mechanisms.
-
     Attributes:
-        n_layer: Number of transformer layers
-        n_embd: Embedding dimension
-        n_hidden: Hidden dimension
-        gqa_query_heads: Number of query heads for grouped-query attention
-        cross_query_heads: Number of query heads for cross-attention
-        kv_heads: Number of key-value heads (must divide gqa_query_heads)
-        gqa_head_dim: Dimension per GQA head (computed automatically)
-        cross_head_dim: Dimension per cross-attention head (computed automatically)
+        n_layer: Number of transformer layers.
+        n_embd: Embedding dimension.
+        n_hidden: Hidden dimension size in the MLP layers.
+        gqa_query_heads: Number of query heads for grouped-query self-attention.
+        cross_query_heads: Number of query heads for cross-attention.
+        kv_heads: Number of key/value heads (shared in GQA and cross-attention).
+        gqa_head_dim: Dimension per GQA head.
+        cross_head_dim: Dimension per cross-attention head.
+        mlp_activations: List of activation functions for the MLP layers.
+        use_pre_norm: Whether to use pre-normalization.
     """
 
     n_layer: int = Field(gt=0)
@@ -122,15 +111,16 @@ class DecoderConfig(BaseModel, frozen=True):
 class ModelConfig(BaseModel, frozen=True):
     """Main configuration container for the Nari model architecture.
 
-    Combines encoder and decoder configurations with vocabulary sizes
-    and dropout settings.
-
     Attributes:
-        encoder: Configuration for the encoder component
-        decoder: Configuration for the decoder component
-        src_vocab_size: Size of the source vocabulary
-        tgt_vocab_size: Size of the target vocabulary
-        dropout: Dropout probability during training
+        encoder: Configuration for the encoder component.
+        decoder: Configuration for the decoder component.
+        src_vocab_size: Size of the source (text) vocabulary.
+        tgt_vocab_size: Size of the target (audio code) vocabulary.
+        dropout: Dropout probability applied within the model.
+        normalization_layer_epsilon: Epsilon value for normalization layers (e.g., LayerNorm).
+        weight_dtype: Data type for model weights (e.g., "float32", "bfloat16").
+        rope_min_timescale: Minimum timescale for Rotary Positional Embeddings (RoPE).
+        rope_max_timescale: Maximum timescale for Rotary Positional Embeddings (RoPE).
     """
 
     encoder: EncoderConfig
@@ -140,28 +130,20 @@ class ModelConfig(BaseModel, frozen=True):
     dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
     normalization_layer_epsilon: float = Field(default=1.0e-5, ge=0.0)
     weight_dtype: str = Field(default="float32", description="Weight precision")
-    rope_min_timescale: int = Field(default=1, description="Timesclae For global Attention")
-    rope_max_timescale: int = Field(default=10_000, description="Timesclae For global Attention")
+    rope_min_timescale: int = Field(default=1, description="Timescale For global Attention")
+    rope_max_timescale: int = Field(default=10_000, description="Timescale For global Attention")
 
 
 class TrainingConfig(BaseModel, frozen=True):
     """Training process configuration and hyperparameters.
 
-    Controls learning rate scheduling, optimization parameters,
-    and training behavior.
+    Note: This configuration currently only includes precision settings.
+    Other training parameters (like batch size, learning rate, optimizer settings)
+    are assumed to be handled externally.
 
     Attributes:
-        batch_size: Number of samples per batch, must be positive and multiple of 8
-        max_steps: Maximum number of training steps
-        eval_every_steps: Number of steps between evaluations
-        learning_rate: Initial learning rate
-        warmup_steps: Number of warmup steps for learning rate
-        lr_decay_steps: Steps after which learning rate decay begins
-        min_lr: Minimum learning rate after decay
-        beta1: Beta1 parameter for Adam optimizer
-        beta2: Beta2 parameter for Adam optimizer
-        unconditional_training_prob: Probability of unconditional training
-        g_accum_iters: Number of gradient accumulation iterations
+        dtype: Data type for activations during training (e.g., "bfloat16", "float32").
+        logits_dot_in_fp32: Whether to compute the final logits dot product in fp32 for stability.
     """
 
     dtype: str = Field(default="bfloat16", description="Activation precision")
@@ -171,17 +153,13 @@ class TrainingConfig(BaseModel, frozen=True):
 class NariConfig(BaseModel, frozen=True):
     """Master configuration for the Nari model.
 
-    Combines all sub-configurations into a single validated configuration
-    object, including model architecture, training parameters, and paths.
+    Combines all sub-configurations into a single validated object.
 
     Attributes:
-        version: Configuration version string
-        created_at: Creation timestamp
-        random_seed: Random seed for reproducibility
-        model: Model architecture configuration
-        training: Training process configuration
-        data_paths: File system paths configuration
-        data: Data loading configuration
+        version: Configuration version string.
+        model: Model architecture configuration.
+        training: Training process configuration (precision settings).
+        data: Data loading and processing configuration.
     """
 
     version: str = Field(default="1.0")
@@ -190,12 +168,16 @@ class NariConfig(BaseModel, frozen=True):
     data: DataConfig
 
     def save(self, path: pathlib.Path) -> None:
-        """Save configuration to disk.
+        """Save the current configuration instance to a JSON file.
+
+        Ensures the parent directory exists and the file has a .json extension.
 
         Args:
-            path: Path to the configuration file
+            path: The target file path to save the configuration.
+
+        Raises:
+            ValueError: If the path is not a file with a .json extension.
         """
-        # Ensure the target is a file path and has a .json suffix
         if not path.name or path.suffix != ".json":
             raise ValueError("Path must be a file with a .json extension")
 
@@ -206,23 +188,29 @@ class NariConfig(BaseModel, frozen=True):
 
     @classmethod
     def load(cls, path: pathlib.Path) -> "NariConfig | None":
-        """Load configuration from disk.
-
-        Deserializes a configuration from JSON and validates it.
+        """Load and validate a Nari configuration from a JSON file.
 
         Args:
-            path: Path to the configuration file
+            path: The path to the configuration file.
 
         Returns:
-            Loaded and validated configuration, or None if file not found
+            A validated NariConfig instance if the file exists and is valid,
+            otherwise None if the file is not found.
+
+        Raises:
+            ValueError: If the path does not point to an existing .json file.
+            pydantic.ValidationError: If the JSON content fails validation against the NariConfig schema.
         """
         try:
-            # Ensure the target is a file path and has a .json suffix
             if not path.is_file() or path.suffix != ".json":
-                raise ValueError("Path must be a file with a .json extension and exist")
+                # Raise ValueError for non-existent files or wrong extension before attempting read
+                raise ValueError("Path must be an existing file with a .json extension")
 
             with open(path, "r") as f:
                 content = f.read()
+            # Pydantic will raise ValidationError if content is invalid
             return cls.model_validate_json(content)
         except FileNotFoundError:
+            # This case might be redundant due to the check above, but kept for safety
             return None
+        # Let ValueError and ValidationError propagate up
