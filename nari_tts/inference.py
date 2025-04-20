@@ -10,8 +10,8 @@ import soundfile as sf
 import torch
 import torchaudio
 
+from .audio import audio_to_codebook, codebook_to_audio
 from .config import NariConfig, load_config
-from .dac_utils import audio_to_codebook, codebook_to_audio
 from .model import KVCache, Nari
 
 

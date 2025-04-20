@@ -102,12 +102,6 @@ class DenseGeneral(nn.Module):
             else:
                 nn.init.zeros_(self.bias)
 
-    def extra_repr(self) -> str:
-        s = f"{self.weight.shape} (dtype {self.weight.dtype})"
-        if self.bias is not None:
-            s += f", bias_shape={tuple(self.bias.shape)}"
-        return s
-
     def forward(self, inputs: Tensor) -> Tensor:
         if self.weight is None:
             raise RuntimeError("Weight parameter not initialized.")
@@ -242,10 +236,6 @@ class RotaryEmbedding(nn.Module):
             self.min_timescale * (self.max_timescale / self.min_timescale) ** fraction,
             persistent=False,
         )
-
-    def extra_repr(self) -> str:
-        s = f"{self.timescale.shape}"
-        return s
 
     def forward(self, inputs: torch.Tensor, position: torch.Tensor):
         """Applies RoPE."""
