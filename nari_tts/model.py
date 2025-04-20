@@ -1,5 +1,5 @@
 import math
-from typing import Any, Iterable, List, Optional, Tuple, Union
+from typing import Any, Iterable
 
 import torch
 import torch.nn as nn
@@ -10,18 +10,18 @@ from torch.nn import RMSNorm
 from .config import NariConfig
 
 
-def _canonicalize_tuple(x: Union[Iterable[int], int]) -> Tuple[int, ...]:
+def _canonicalize_tuple(x: Iterable[int] | int) -> tuple[int, ...]:
     if isinstance(x, Iterable):
         return tuple(x)
     else:
         return (x,)
 
 
-def _normalize_axes(axes: Tuple[int, ...], ndim: int) -> Tuple[int, ...]:
+def _normalize_axes(axes: tuple[int, ...], ndim: int) -> tuple[int, ...]:
     return tuple(ax if ax >= 0 else ndim + ax for ax in axes)
 
 
-def _str_to_dtype(dtype_str: str) -> Optional[torch.dtype]:
+def _str_to_dtype(dtype_str: str) -> torch.dtype | None:
     # Allow None for default behavior
     if dtype_str is None or dtype_str.lower() == "none":
         return None
@@ -55,20 +55,20 @@ class DenseGeneral(nn.Module):
 
     def __init__(
         self,
-        in_shapes: Tuple[int, ...],
-        out_features: Union[int, Tuple[int, ...]],
-        axis: Union[Iterable[int], int] = -1,
+        in_shapes: tuple[int, ...],
+        out_features: int | tuple[int, ...],
+        axis: Iterable[int] | int = -1,
         use_bias: bool = False,
-        dtype: Optional[torch.dtype] = None,
-        weight_dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
+        dtype: torch.dtype | None = None,
+        weight_dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
     ):
         super().__init__()
-        self.in_shapes: Tuple[int, ...] = _canonicalize_tuple(in_shapes)
-        self.out_features: Tuple[int, ...] = _canonicalize_tuple(out_features)
-        self.axis_tuple: Tuple[int, ...] = _canonicalize_tuple(axis)
+        self.in_shapes: tuple[int, ...] = _canonicalize_tuple(in_shapes)
+        self.out_features: tuple[int, ...] = _canonicalize_tuple(out_features)
+        self.axis_tuple: tuple[int, ...] = _canonicalize_tuple(axis)
         self.use_bias: bool = use_bias
-        self.dtype: Optional[torch.dtype] = dtype  # Store computation dtype if specified
+        self.dtype: torch.dtype | None = dtype  # Store computation dtype if specified
 
         factory_kwargs = {"device": device, "dtype": weight_dtype}
 
@@ -78,8 +78,8 @@ class DenseGeneral(nn.Module):
                 f"length of axis {self.axis_tuple} ({len(self.axis_tuple)})"
             )
 
-        self.kernel_shape: Tuple[int, ...] = self.in_shapes + self.out_features
-        self.bias_shape: Optional[Tuple[int, ...]] = self.out_features if use_bias else None
+        self.kernel_shape: tuple[int, ...] = self.in_shapes + self.out_features
+        self.bias_shape: tuple[int, ...] | None = self.out_features if use_bias else None
 
         self.weight = nn.Parameter(torch.empty(self.kernel_shape, **factory_kwargs))
         if use_bias:
@@ -152,7 +152,7 @@ class MlpBlock(nn.Module):
         embed_dim: int,
         intermediate_dim: int,
         dropout_rate: float,
-        activations: List[str] = ["silu", "linear"],
+        activations: list[str] = ["silu", "linear"],
         use_pre_norm: bool = False,
     ):
         super().__init__()
@@ -304,7 +304,7 @@ class Attention(nn.Module):
         head_dim: int,
         dropout_rate: float,
         is_cross_attn: bool = False,
-        out_embed_dim: Optional[int] = None,
+        out_embed_dim: int | None = None,
     ):
         super().__init__()
         self.num_query_heads = num_query_heads
@@ -367,12 +367,12 @@ class Attention(nn.Module):
         Xq: torch.Tensor,  # (B, T, D) T = 1 in AR generation
         Xkv: torch.Tensor,  # (B, S, E) S = 1 in AR generation
         q_positions: torch.Tensor,  # (B, T)
-        kv_positions: Optional[torch.Tensor] = None,  # (B, S)
+        kv_positions: torch.Tensor | None = None,  # (B, S)
         deterministic: bool = True,
-        attn_mask: Optional[torch.Tensor] = None,  # None in Decoder Self Attention, Valid mask in Others
-        cache: Optional[KVCache] = None,  # None in Encoder, KVCache in Decoder
+        attn_mask: torch.Tensor | None = None,  # None in Decoder Self Attention, Valid mask in Others
+        cache: KVCache | None = None,  # None in Encoder, KVCache in Decoder
         prefill: bool = False,  # True only when prefilling KV Cache
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         """
         Performs attention calculation with optional KV caching.
 
@@ -400,9 +400,9 @@ class Attention(nn.Module):
         Xq_BxNxTxH = Xq_BxTxNxH.transpose(1, 2)
 
         # Input values into attention calculation
-        attn_k: Optional[torch.Tensor] = None
-        attn_v: Optional[torch.Tensor] = None
-        new_kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+        attn_k: torch.Tensor | None = None
+        attn_v: torch.Tensor | None = None
+        new_kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None
 
         # Decoder Cross Attention
         if self.is_cross_attn:
@@ -506,9 +506,9 @@ class EncoderLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        src_positions: Optional[torch.Tensor] = None,
+        src_positions: torch.Tensor | None = None,
         deterministic: bool = True,
-        attn_mask: Optional[torch.Tensor] = None,
+        attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         residual = x
         x_norm = self.pre_sa_norm(x)
@@ -559,9 +559,9 @@ class Encoder(nn.Module):
     def forward(
         self,
         x_ids: torch.Tensor,
-        src_positions: Optional[torch.Tensor] = None,
+        src_positions: torch.Tensor | None = None,
         deterministic: bool = True,
-        attn_mask: Optional[torch.Tensor] = None,
+        attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x = self.embedding(x_ids)
 
@@ -649,7 +649,7 @@ class DecoderLayer(nn.Module):
         x: torch.Tensor,
         encoder_out: torch.Tensor,
         tgt_positions: torch.Tensor,
-        src_positions: Optional[torch.Tensor],
+        src_positions: torch.Tensor | None,
         deterministic: bool,
         self_attn_mask: torch.Tensor,
         cross_attn_mask: torch.Tensor,
@@ -740,12 +740,12 @@ class Decoder(nn.Module):
         self,
         max_len: int,
         encoder_out: torch.Tensor,  # (B, S, E)
-        src_positions: Optional[torch.Tensor],  # (B, S)
-    ) -> List[KVCache]:
+        src_positions: torch.Tensor | None,  # (B, S)
+    ) -> list[KVCache]:
         """
         Computes the Key and Value tensors for cross-attention for each layer from the encoder output.
         """
-        per_layer_kv_cache: List[KVCache] = []
+        per_layer_kv_cache: list[KVCache] = []
 
         for layer in self.layers:
             cross_attn_module = layer.cross_attention
@@ -776,8 +776,8 @@ class Decoder(nn.Module):
         encoder_out: torch.Tensor,  # [B, S, E]
         self_attn_mask: Any,  # None
         cross_attn_mask: torch.Tensor,  # [B, 1, 1, S]
-        self_attention_cache: List[KVCache],
-        cross_attention_cache: List[KVCache],
+        self_attention_cache: list[KVCache],
+        cross_attention_cache: list[KVCache],
     ) -> torch.Tensor:
         """
         Performs a single decoding step, managing KV caches layer by layer.
@@ -826,8 +826,8 @@ class Decoder(nn.Module):
         deterministic: bool,
         self_attn_mask: torch.Tensor,
         cross_attn_mask: torch.Tensor,
-        self_attention_cache: List[KVCache],
-        cross_attention_cache: List[KVCache],
+        self_attention_cache: list[KVCache],
+        cross_attention_cache: list[KVCache],
     ) -> torch.Tensor:
         """
         Forward pass for the Decoder stack, managing KV caches.
@@ -900,11 +900,11 @@ class Nari(nn.Module):
         self,
         src_BxS: torch.Tensor,
         tgt_BxTxC: torch.Tensor,
-        src_positions: Optional[torch.Tensor] = None,
-        tgt_positions: Optional[torch.Tensor] = None,
-        enc_self_attn_mask: Optional[torch.Tensor] = None,
-        dec_self_attn_mask: Optional[torch.Tensor] = None,
-        dec_cross_attn_mask: Optional[torch.Tensor] = None,
+        src_positions: torch.Tensor | None = None,
+        tgt_positions: torch.Tensor | None = None,
+        enc_self_attn_mask: torch.Tensor | None = None,
+        dec_self_attn_mask: torch.Tensor | None = None,
+        dec_cross_attn_mask: torch.Tensor | None = None,
         enable_dropout: bool = True,
     ):
         deterministic = not enable_dropout
