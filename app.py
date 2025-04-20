@@ -10,7 +10,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from nari_tts.inference import (
+from dia.inference import (
     codebook_to_audio,
     generate,
     load_model_and_config,
@@ -23,7 +23,7 @@ parser.add_argument("--config", type=str, default="./config.json", help="Path to
 parser.add_argument(
     "--checkpoint",
     type=str,
-    default="./nari_v0.pth",
+    default="./dia-v0_1.pth",
     help="Path to model checkpoint file",
 )
 parser.add_argument("--dac_model_type", type=str, default="44khz", help="DAC model type (e.g., 44khz)")

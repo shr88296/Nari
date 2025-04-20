@@ -877,8 +877,8 @@ class Decoder(nn.Module):
         return logits_BxTxCxV.to(torch.float32)
 
 
-class Nari(nn.Module):
-    """PyTorch Nari Model using DenseGeneral."""
+class Dia(nn.Module):
+    """PyTorch Dia Model using DenseGeneral."""
 
     def __init__(self, config: DiaConfig):
         super().__init__()

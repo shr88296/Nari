@@ -1,4 +1,4 @@
-# Inference script for Nari (text in -> audio out)
+# Inference script for Dia (text in -> audio out)
 import argparse
 import time
 from pathlib import Path
@@ -12,17 +12,17 @@ import torchaudio
 
 from .audio import audio_to_codebook, codebook_to_audio
 from .config import DiaConfig
-from .model import KVCache, Nari
+from .model import Dia, KVCache
 
 
-def load_model_and_config(config_path: Path, checkpoint_path: Path, device: torch.device) -> Tuple[Nari, DiaConfig]:
-    """Loads the Nari model and its configuration."""
+def load_model_and_config(config_path: Path, checkpoint_path: Path, device: torch.device) -> Tuple[Dia, DiaConfig]:
+    """Loads the Dia model and its configuration."""
     config = DiaConfig.load(config_path)
     if config is None:
         raise FileNotFoundError(f"Config file not found at {config_path}")
 
-    model = Nari(config)
-    print(f"Instantiated Nari model with config from {config_path}")
+    model = Dia(config)
+    print(f"Instantiated Dia model with config from {config_path}")
 
     try:
         checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -154,7 +154,7 @@ def sample_next_token(
 
 @torch.inference_mode()
 def generate(
-    model: Nari,
+    model: Dia,
     config: DiaConfig,
     txt_file_path: str,
     max_tokens: int,
@@ -169,7 +169,7 @@ def generate(
     dac_model: Optional[dac.DAC] = None,
 ) -> torch.Tensor:
     """
-    Generates audio from a text prompt (and optional audio prompt) using the Nari model.
+    Generates audio from a text prompt (and optional audio prompt) using the Dia model.
 
     Returns:
         A tensor of generated audio codes (shape: [max_tokens, num_channels]).
@@ -281,7 +281,7 @@ def generate(
     # 4. Autoregressive Generation Loop
     eos_detected_channel_0 = False
     eos_countdown = -1
-    extra_steps_after_eos = 30
+    extra_steps_after_eos = 15
     # Make generated_BxTxC a fixed size tensor
     # Length is either 1 + max tokens or 1 + prompt len + max tokens
     generated_BxTxC = torch.cat(
