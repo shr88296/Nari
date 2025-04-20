@@ -185,43 +185,44 @@ class NariConfig(BaseModel, frozen=True):
     """
 
     version: str = Field(default="1.0")
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     model: ModelConfig
     training: TrainingConfig
     data: DataConfig
 
+    def save(self, path: pathlib.Path) -> None:
+        """Save configuration to disk.
 
-def save_config(path: pathlib.Path, config: NariConfig) -> None:
-    """Save configuration to disk.
+        Args:
+            path: Path to the configuration file
+        """
+        # Ensure the target is a file path and has a .json suffix
+        if not path.name or path.suffix != ".json":
+            raise ValueError("Path must be a file with a .json extension")
 
-    Args:
-        path: Path to the configuration file
-        config: Complete Nari configuration to save
-    """
-    assert path.is_file()
-    assert path.suffix == ".json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    config_json = config.model_dump_json(indent=2)
-    with open(path, "w") as f:
-        f.write(config_json)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        config_json = self.model_dump_json(indent=2)
+        with open(path, "w") as f:
+            f.write(config_json)
 
+    @classmethod
+    def load(cls, path: pathlib.Path) -> "NariConfig | None":
+        """Load configuration from disk.
 
-def load_config(path: pathlib.Path) -> NariConfig | None:
-    """Load configuration from disk.
+        Deserializes a configuration from JSON and validates it.
 
-    Deserializes a configuration from JSON and validates it.
+        Args:
+            path: Path to the configuration file
 
-    Args:
-        path: Path to the configuration file
+        Returns:
+            Loaded and validated configuration, or None if file not found
+        """
+        try:
+            # Ensure the target is a file path and has a .json suffix
+            if not path.is_file() or path.suffix != ".json":
+                raise ValueError("Path must be a file with a .json extension and exist")
 
-    Returns:
-        Loaded and validated configuration, or None if file not found
-    """
-    try:
-        assert path.is_file()
-        assert path.suffix == ".json"
-        with open(path, "r") as f:
-            content = f.read()
-        return NariConfig.model_validate_json(content)
-    except FileNotFoundError:
-        return None
+            with open(path, "r") as f:
+                content = f.read()
+            return cls.model_validate_json(content)
+        except FileNotFoundError:
+            return None

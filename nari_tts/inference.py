@@ -11,13 +11,16 @@ import torch
 import torchaudio
 
 from .audio import audio_to_codebook, codebook_to_audio
-from .config import NariConfig, load_config
+from .config import NariConfig
 from .model import KVCache, Nari
 
 
 def load_model_and_config(config_path: Path, checkpoint_path: Path, device: torch.device) -> Tuple[Nari, NariConfig]:
     """Loads the Nari model and its configuration."""
-    config = load_config(config_path)
+    config = NariConfig.load(config_path)
+    if config is None:
+        raise FileNotFoundError(f"Config file not found at {config_path}")
+
     model = Nari(config)
     print(f"Instantiated Nari model with config from {config_path}")
 

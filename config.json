@@ -1,6 +1,5 @@
 {
-    "version": "0.5",
-    "created_at": "2025-03-19:19:00.000000",
+    "version": "0.1",
     "model": {
         "encoder": {
             "n_layer": 12,
@@ -22,6 +21,10 @@
         "src_vocab_size": 256,
         "tgt_vocab_size": 1028,
         "dropout": 0.0
+    },
+    "training": {
+        "dtype": "bfloat16",
+        "logits_dot_in_fp32": false
     },
     "data": {
         "text_length": 1024,

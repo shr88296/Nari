@@ -16,3 +16,5 @@ wheels/
 **/*.txt
 
 .ruff_cache
+.ipynb_checkpoints
+config.json
