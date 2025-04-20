@@ -1,6 +1,6 @@
-"""Configuration management module for the Nari model.
+"""Configuration management module for the Dia model.
 
-This module provides comprehensive configuration management for the Nari model,
+This module provides comprehensive configuration management for the Dia model,
 utilizing Pydantic for validation. It defines configurations for data processing,
 model architecture (encoder and decoder), and training settings.
 
@@ -10,7 +10,7 @@ Key components:
 - DecoderConfig: Architecture details for the decoder module.
 - ModelConfig: Combined model architecture settings.
 - TrainingConfig: Training hyperparameters and settings.
-- NariConfig: Master configuration combining all components.
+- DiaConfig: Master configuration combining all components.
 """
 
 import pathlib
@@ -59,7 +59,7 @@ class DataConfig(BaseModel, frozen=True):
 
 
 class EncoderConfig(BaseModel, frozen=True):
-    """Configuration for the encoder component of the Nari model.
+    """Configuration for the encoder component of the Dia model.
 
     Attributes:
         n_layer: Number of transformer layers.
@@ -81,7 +81,7 @@ class EncoderConfig(BaseModel, frozen=True):
 
 
 class DecoderConfig(BaseModel, frozen=True):
-    """Configuration for the decoder component of the Nari model.
+    """Configuration for the decoder component of the Dia model.
 
     Attributes:
         n_layer: Number of transformer layers.
@@ -109,7 +109,7 @@ class DecoderConfig(BaseModel, frozen=True):
 
 
 class ModelConfig(BaseModel, frozen=True):
-    """Main configuration container for the Nari model architecture.
+    """Main configuration container for the Dia model architecture.
 
     Attributes:
         encoder: Configuration for the encoder component.
@@ -150,8 +150,8 @@ class TrainingConfig(BaseModel, frozen=True):
     logits_dot_in_fp32: bool = Field(default=False)
 
 
-class NariConfig(BaseModel, frozen=True):
-    """Master configuration for the Nari model.
+class DiaConfig(BaseModel, frozen=True):
+    """Master configuration for the Dia model.
 
     Combines all sub-configurations into a single validated object.
 
@@ -187,19 +187,19 @@ class NariConfig(BaseModel, frozen=True):
             f.write(config_json)
 
     @classmethod
-    def load(cls, path: pathlib.Path) -> "NariConfig | None":
-        """Load and validate a Nari configuration from a JSON file.
+    def load(cls, path: pathlib.Path) -> "DiaConfig | None":
+        """Load and validate a Dia configuration from a JSON file.
 
         Args:
             path: The path to the configuration file.
 
         Returns:
-            A validated NariConfig instance if the file exists and is valid,
+            A validated DiaConfig instance if the file exists and is valid,
             otherwise None if the file is not found.
 
         Raises:
             ValueError: If the path does not point to an existing .json file.
-            pydantic.ValidationError: If the JSON content fails validation against the NariConfig schema.
+            pydantic.ValidationError: If the JSON content fails validation against the DiaConfig schema.
         """
         try:
             if not path.is_file() or path.suffix != ".json":

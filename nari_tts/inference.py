@@ -11,13 +11,13 @@ import torch
 import torchaudio
 
 from .audio import audio_to_codebook, codebook_to_audio
-from .config import NariConfig
+from .config import DiaConfig
 from .model import KVCache, Nari
 
 
-def load_model_and_config(config_path: Path, checkpoint_path: Path, device: torch.device) -> Tuple[Nari, NariConfig]:
+def load_model_and_config(config_path: Path, checkpoint_path: Path, device: torch.device) -> Tuple[Nari, DiaConfig]:
     """Loads the Nari model and its configuration."""
-    config = NariConfig.load(config_path)
+    config = DiaConfig.load(config_path)
     if config is None:
         raise FileNotFoundError(f"Config file not found at {config_path}")
 
@@ -77,7 +77,7 @@ def create_attn_mask(
 
 
 def _prepare_text_input(
-    txt_file_path: str, config: NariConfig, device: torch.device
+    txt_file_path: str, config: DiaConfig, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Encodes text prompt, pads, and creates attention mask and positions."""
     text_pad_value = config.data.text_pad_value
@@ -155,7 +155,7 @@ def sample_next_token(
 @torch.inference_mode()
 def generate(
     model: Nari,
-    config: NariConfig,
+    config: DiaConfig,
     txt_file_path: str,
     max_tokens: int,
     cfg_scale: float,

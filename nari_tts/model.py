@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn import RMSNorm
 
-from .config import NariConfig
+from .config import DiaConfig
 
 
 def _canonicalize_tuple(x: Iterable[int] | int) -> tuple[int, ...]:
@@ -142,7 +142,7 @@ class MlpBlock(nn.Module):
 
     def __init__(
         self,
-        config: NariConfig,
+        config: DiaConfig,
         embed_dim: int,
         intermediate_dim: int,
         dropout_rate: float,
@@ -286,7 +286,7 @@ class Attention(nn.Module):
 
     def __init__(
         self,
-        config: NariConfig,
+        config: DiaConfig,
         q_embed_dim: int,
         kv_embed_dim: int,
         num_query_heads: int,
@@ -455,7 +455,7 @@ class Attention(nn.Module):
 class EncoderLayer(nn.Module):
     """Transformer Encoder Layer using DenseGeneral."""
 
-    def __init__(self, config: NariConfig):
+    def __init__(self, config: DiaConfig):
         super().__init__()
         self.config = config
         model_config = config.model
@@ -526,7 +526,7 @@ class EncoderLayer(nn.Module):
 class Encoder(nn.Module):
     """Transformer Encoder Stack using DenseGeneral."""
 
-    def __init__(self, config: NariConfig):
+    def __init__(self, config: DiaConfig):
         super().__init__()
         self.config = config
         model_config = config.model
@@ -574,7 +574,7 @@ class Encoder(nn.Module):
 class DecoderLayer(nn.Module):
     """Transformer Decoder Layer using DenseGeneral."""
 
-    def __init__(self, config: NariConfig):
+    def __init__(self, config: DiaConfig):
         super().__init__()
         self.config = config
         model_config = config.model
@@ -689,7 +689,7 @@ class DecoderLayer(nn.Module):
 class Decoder(nn.Module):
     """Transformer Decoder Stack using DenseGeneral."""
 
-    def __init__(self, config: NariConfig):
+    def __init__(self, config: DiaConfig):
         super().__init__()
         self.config = config
         model_config = config.model
@@ -880,7 +880,7 @@ class Decoder(nn.Module):
 class Nari(nn.Module):
     """PyTorch Nari Model using DenseGeneral."""
 
-    def __init__(self, config: NariConfig):
+    def __init__(self, config: DiaConfig):
         super().__init__()
         self.config = config
         self.encoder = Encoder(config)
