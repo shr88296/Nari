@@ -15,33 +15,17 @@ from dia.inference import (
     generate,
     load_model_and_config,
 )
+from dia.model import Dia
 
 
 # --- Global Setup ---
 parser = argparse.ArgumentParser(description="Gradio interface for Nari TTS")
-parser.add_argument("--config", type=str, default="./config.json", help="Path to model config file")
-parser.add_argument(
-    "--checkpoint",
-    type=str,
-    default="./dia-v0_1.pth",
-    help="Path to model checkpoint file",
-)
 parser.add_argument("--dac_model_type", type=str, default="44khz", help="DAC model type (e.g., 44khz)")
 parser.add_argument("--device", type=str, default=None, help="Force device (e.g., 'cuda', 'mps', 'cpu')")
 parser.add_argument("--share", action="store_true", help="Enable Gradio sharing")
 
 args = parser.parse_args()
 
-CONFIG_PATH = Path(args.config)
-CHECKPOINT_PATH = Path(args.checkpoint)
-
-if not CONFIG_PATH.exists():
-    # Adding print statement for clarity in logs if run non-interactively
-    print(f"Error: Config file not found at {CONFIG_PATH}")
-    raise FileNotFoundError(f"Error: Config file not found at {CONFIG_PATH}")
-if not CHECKPOINT_PATH.exists():
-    print(f"Error: Checkpoint file not found at {CHECKPOINT_PATH}")
-    raise FileNotFoundError(f"Error: Checkpoint file not found at {CHECKPOINT_PATH}")
 
 # Determine device
 if args.device:
@@ -61,7 +45,8 @@ print(f"Using device: {device}")
 print("Loading Nari model...")
 try:
     # Use the function from inference.py
-    model, config = load_model_and_config(CONFIG_PATH, CHECKPOINT_PATH, device)
+    model = Dia.from_pretrained("NariLabs/Dia-1.6B", device)
+    config = model.config
     # Ensure model is in eval mode after loading
     model.eval()
 except Exception as e:
@@ -298,7 +283,6 @@ if example_txt_path.exists():
 # Build Gradio UI
 with gr.Blocks(css=css) as demo:
     gr.Markdown("# Nari Text-to-Speech Synthesis")
-    gr.Markdown(f"**Model:** `{CHECKPOINT_PATH.name}` | **Config:** `{CONFIG_PATH.name}` | **Device:** `{device}`")
 
     with gr.Row(equal_height=False):
         with gr.Column(scale=1):

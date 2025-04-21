@@ -11,8 +11,9 @@ import torch
 import torchaudio
 
 from .audio import audio_to_codebook, codebook_to_audio
-from .config import DiaConfig
-from .model import Dia, KVCache
+from .config import DiaConfig, InferenceParams
+from .layers import KVCache
+from .model import Dia
 
 
 def load_model_and_config(config_path: Path, checkpoint_path: Path, device: torch.device) -> Tuple[Dia, DiaConfig]:
@@ -201,7 +202,6 @@ def generate(
     encoder_out = model.encoder(
         x_ids=src_BxS,
         src_positions=src_positions_BxS,
-        deterministic=True,
         attn_mask=enc_self_attn_mask_Bx1xSxS,
     )  # Shape: (B, S, E)
 
@@ -210,7 +210,7 @@ def generate(
     # 3. Prepare Decoder Inputs
     # 3-1. Allocate KV Cache (Static)
     decoder_cross_attention_cache: List[KVCache] = model.decoder.precompute_cross_attention_kv(
-        max_tokens, encoder_out, src_positions_BxS
+        encoder_out, src_positions_BxS, InferenceParams(max_seq_len=max_tokens, device=device, dtype=torch.float32)
     )
 
     decoder_self_attention_cache: List[KVCache] = []
@@ -268,7 +268,6 @@ def generate(
             encoder_out=encoder_out,
             tgt_positions=prefill_tgt_pos,
             src_positions=src_positions_BxS,
-            deterministic=True,
             self_attn_mask=prefill_self_attn_mask,
             cross_attn_mask=prefill_cross_attn_mask,
             self_attention_cache=decoder_self_attention_cache,
@@ -452,7 +451,7 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     try:
-        model, config = load_model_and_config(CONFIG_PATH, CHECKPOINT_PATH, device)
+        model = Dia.from_pretrained("NariLabs/Dia-1.6B", device)
     except (FileNotFoundError, RuntimeError, ValueError) as e:
         print(f"Error loading model: {e}")
         exit(1)
@@ -467,7 +466,7 @@ if __name__ == "__main__":
     try:
         generated_codes = generate(
             model=model,
-            config=config,
+            config=model.config,
             txt_file_path=txt_file_path,
             max_tokens=max_tokens,
             cfg_scale=cfg_scale,
@@ -489,10 +488,10 @@ if __name__ == "__main__":
             audio = codebook_to_audio(
                 generated_codes.transpose(1, 0),
                 dac_model,
-                config.data.delay_pattern,
+                model.config.data.delay_pattern,
                 B=1,
                 T=max_tokens,
-                C=config.data.channels,
+                C=model.config.data.channels,
             )
             sf.write(audio_output_path, audio.cpu().numpy().squeeze(), 44100)
         else:

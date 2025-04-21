@@ -13,10 +13,13 @@ Key components:
 - DiaConfig: Master configuration combining all components.
 """
 
+import os
 import pathlib
 from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator, Field
+import torch
+from dataclasses import dataclass
 
 
 class DataConfig(BaseModel, frozen=True):
@@ -167,7 +170,7 @@ class DiaConfig(BaseModel, frozen=True):
     training: TrainingConfig
     data: DataConfig
 
-    def save(self, path: pathlib.Path) -> None:
+    def save(self, path: str) -> None:
         """Save the current configuration instance to a JSON file.
 
         Ensures the parent directory exists and the file has a .json extension.
@@ -178,16 +181,13 @@ class DiaConfig(BaseModel, frozen=True):
         Raises:
             ValueError: If the path is not a file with a .json extension.
         """
-        if not path.name or path.suffix != ".json":
-            raise ValueError("Path must be a file with a .json extension")
-
-        path.parent.mkdir(parents=True, exist_ok=True)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         config_json = self.model_dump_json(indent=2)
         with open(path, "w") as f:
             f.write(config_json)
 
     @classmethod
-    def load(cls, path: pathlib.Path) -> "DiaConfig | None":
+    def load(cls, path: str) -> "DiaConfig | None":
         """Load and validate a Dia configuration from a JSON file.
 
         Args:
@@ -202,15 +202,49 @@ class DiaConfig(BaseModel, frozen=True):
             pydantic.ValidationError: If the JSON content fails validation against the DiaConfig schema.
         """
         try:
-            if not path.is_file() or path.suffix != ".json":
-                # Raise ValueError for non-existent files or wrong extension before attempting read
-                raise ValueError("Path must be an existing file with a .json extension")
-
             with open(path, "r") as f:
                 content = f.read()
-            # Pydantic will raise ValidationError if content is invalid
             return cls.model_validate_json(content)
         except FileNotFoundError:
-            # This case might be redundant due to the check above, but kept for safety
             return None
-        # Let ValueError and ValidationError propagate up
+
+
+def _str_to_dtype(dtype_str: str) -> torch.dtype | None:
+    # Allow None for default behavior
+    if dtype_str is None or dtype_str.lower() == "none":
+        return None
+    if dtype_str == "float32":
+        return torch.float32
+    elif dtype_str == "float16":
+        return torch.float16
+    elif dtype_str == "bfloat16":
+        return torch.bfloat16
+    else:
+        raise ValueError(f"Unsupported dtype string: {dtype_str}")
+
+
+@dataclass
+class InferenceParams:
+    """Parameters specifically for inference."""
+
+    max_seq_len: int
+    device: torch.device
+    dtype: torch.dtype
+
+    @classmethod
+    def from_config(cls, config: "DiaConfig", device: str | torch.device = "cpu") -> "InferenceParams":
+        """Creates InferenceParams from DiaConfig and a device."""
+        if isinstance(device, str):
+            device = torch.device(device)
+
+        # Extract dtype from training config
+        compute_dtype = _str_to_dtype(config.training.dtype)
+        if compute_dtype is None:
+            # Default to float32 if not specified or None
+            # You might want to log a warning here
+            compute_dtype = torch.float32
+
+        # Assuming config structure based on model.py usage
+        max_len = config.data.audio_length
+
+        return cls(max_seq_len=max_len, device=device, dtype=compute_dtype)
