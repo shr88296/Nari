@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
-import dac
 import gradio as gr
 import numpy as np
 import soundfile as sf
@@ -15,7 +14,6 @@ from dia.model import Dia
 
 # --- Global Setup ---
 parser = argparse.ArgumentParser(description="Gradio interface for Nari TTS")
-parser.add_argument("--dac_model_type", type=str, default="44khz", help="DAC model type (e.g., 44khz)")
 parser.add_argument("--device", type=str, default=None, help="Force device (e.g., 'cuda', 'mps', 'cpu')")
 parser.add_argument("--share", action="store_true", help="Enable Gradio sharing")
 
@@ -40,41 +38,12 @@ print(f"Using device: {device}")
 print("Loading Nari model...")
 try:
     # Use the function from inference.py
-    model = Dia.from_pretrained("NariLabs/Dia-1.6B", device)
-    config = model.config
-    # Ensure model is in eval mode after loading
-    model.eval()
+    model = Dia.from_pretrained("nari-labs/Dia-1.6B")
 except Exception as e:
     print(f"Error loading Nari model: {e}")
     raise
 
-# Placeholder for DAC model - load lazily
-dac_model = None
-dac_model_path = None
-print(f"DAC model type set to: {args.dac_model_type}")
 
-
-def ensure_dac_model_loaded():
-    """Loads the DAC model if it hasn't been loaded yet."""
-    global dac_model, dac_model_path, device, args
-    if dac_model is None:
-        print("Loading DAC model...")
-        try:
-            dac_model_path = dac.utils.download(model_type=args.dac_model_type)
-            # Ensure model is loaded to the correct device
-            dac_model = dac.DAC.load(dac_model_path).to(device)
-            dac_model.eval()  # Set DAC to eval mode as well
-            print(f"DAC model loaded successfully from {dac_model_path} to {device}.")
-        except Exception as e:
-            print(f"Error loading DAC model ({args.dac_model_type}): {e}")
-            # Make sure dac_model remains None if loading fails
-            dac_model = None
-            raise gr.Error(f"Failed to load DAC model: {e}")  # Raise Gradio error for UI feedback
-    return dac_model
-
-
-# --- Gradio Inference Function ---
-# @torch.inference_mode() # Apply inference mode decorator for efficiency
 def run_inference(
     text_input: str,
     audio_prompt_input: Optional[Tuple[int, np.ndarray]],
@@ -82,15 +51,14 @@ def run_inference(
     cfg_scale: float,
     temperature: float,
     top_p: float,
-    use_cfg_filter: bool,
     cfg_filter_top_k: int,
-    progress=gr.Progress(track_tqdm=True),  # Add progress tracking
+    speed_factor: float,
 ):
     """
     Runs Nari inference using the globally loaded model and provided inputs.
     Uses temporary files for text and audio prompt compatibility with inference.generate.
     """
-    global model, config, device  # Access global model, config, device
+    global model, device  # Access global model, config, device
 
     if not text_input or text_input.isspace():
         raise gr.Error("Text input cannot be empty.")
@@ -101,17 +69,6 @@ def run_inference(
     output_audio = (44100, np.zeros(1, dtype=np.float32))
 
     try:
-        # Ensure model is on the correct device before inference
-        model.to(device)
-
-        # 1. Prepare Text Input File
-        # Use NamedTemporaryFile for automatic cleanup potential, but manage explicitly
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f_txt:
-            f_txt.write(text_input)
-            temp_txt_file_path = f_txt.name
-        print(f"Created temporary text file: {temp_txt_file_path}")
-
-        # 2. Prepare Audio Prompt Input File (if provided)
         prompt_path_for_generate = None
         if audio_prompt_input is not None:
             sr, audio_data = audio_prompt_input
@@ -119,9 +76,6 @@ def run_inference(
             if audio_data is None or audio_data.size == 0 or audio_data.max() == 0:  # Check for silence/empty
                 gr.Warning("Audio prompt seems empty or silent, ignoring prompt.")
             else:
-                # Ensure DAC model is loaded if a valid prompt is provided
-                _ = ensure_dac_model_loaded()  # Load DAC if needed, ignore return val for now
-
                 # Save prompt audio to a temporary WAV file
                 with tempfile.NamedTemporaryFile(mode="wb", suffix=".wav", delete=False) as f_audio:
                     temp_audio_prompt_path = f_audio.name  # Store path for cleanup
@@ -166,67 +120,54 @@ def run_inference(
                         raise gr.Error(f"Failed to save audio prompt: {write_e}")
 
         # 3. Run Generation
-        # Pass the currently loaded DAC model instance (if loaded) to generate
-        # This avoids generate trying to load it again unnecessarily
-        dac_model_instance = dac_model  # Use the globally loaded instance
 
-        print("\n--- Starting Generation ---")
-        print(f"Params: max_tokens={max_new_tokens}, cfg={cfg_scale}, temp={temperature}, top_p={top_p}")
         start_time = time.time()
 
         # Use torch.inference_mode() context manager for the generation call
         with torch.inference_mode():
-            generated_codes = generate(
-                model=model,
-                config=config,
-                txt_file_path=temp_txt_file_path,
+            output_audio_np = model.generate(
+                text_input,
                 max_tokens=max_new_tokens,
                 cfg_scale=cfg_scale,
                 temperature=temperature,
                 top_p=top_p,
                 use_cfg_filter=True,
-                cfg_filter_top_k=50,  # Ensure int
-                device=device,
+                cfg_filter_top_k=cfg_filter_top_k,  # Pass the value here
                 use_torch_compile=False,  # Keep False for Gradio stability
                 audio_prompt_path=prompt_path_for_generate,
-                dac_model=dac_model_instance,  # Pass the loaded dac model instance
             )
 
         end_time = time.time()
         print(f"Generation finished in {end_time - start_time:.2f} seconds.")
-        print(f"Generated codes shape: {generated_codes.shape if generated_codes is not None else 'None'}")
 
         # 4. Convert Codes to Audio
-        if generated_codes is not None and generated_codes.numel() > 0:
-            print("Converting generated codes to audio...")
-            # Ensure DAC model is loaded for conversion step
-            current_dac_model = ensure_dac_model_loaded()
-            if not current_dac_model:  # Check if loading failed earlier
-                raise gr.Error("DAC model is required for audio conversion but failed to load.")
-
-            # Ensure codes have the expected shape [T, C] for codebook_to_audio's input transpose
-            if generated_codes.dim() == 3 and generated_codes.shape[0] == 1:
-                codes_for_dac = generated_codes.squeeze(0)
-            elif generated_codes.dim() == 2:
-                codes_for_dac = generated_codes
-            else:
-                raise ValueError(f"Unexpected shape for generated_codes: {generated_codes.shape}")
-
-            # codebook_to_audio expects codes shape [C, T] after transpose
-            # It returns audio tensor shape [1, T_audio]
-            with torch.inference_mode():  # Use inference mode for DAC conversion too
-                audio_tensor = codebook_to_audio(
-                    codes_for_dac.transpose(0, 1),  # Transpose T,C -> C,T
-                    current_dac_model,
-                    config.data.delay_pattern,
-                    C=config.data.channels,
-                )
-
-            output_audio_np = audio_tensor.cpu().float().numpy().squeeze()  # Ensure float type
+        if output_audio_np is not None:
             # Get sample rate from the loaded DAC model
-            output_sr = current_dac_model.sample_rate
-            output_audio = (output_sr, output_audio_np)
-            print(f"Audio conversion successful. Output shape: {output_audio_np.shape}, Sample Rate: {output_sr}")
+            output_sr = 44100
+
+            # --- Slow down audio ---
+            original_len = len(output_audio_np)
+            # Ensure speed_factor is positive and not excessively small/large to avoid issues
+            speed_factor = max(0.1, min(speed_factor, 5.0))
+            target_len = int(original_len / speed_factor)  # Target length based on speed_factor
+            if target_len != original_len and target_len > 0:  # Only interpolate if length changes and is valid
+                x_original = np.arange(original_len)
+                x_resampled = np.linspace(0, original_len - 1, target_len)
+                resampled_audio_np = np.interp(x_resampled, x_original, output_audio_np)
+                output_audio = (
+                    output_sr,
+                    resampled_audio_np.astype(np.float32),
+                )  # Use resampled audio
+                print(f"Resampled audio from {original_len} to {target_len} samples for {speed_factor:.2f}x speed.")
+            else:
+                output_audio = (
+                    output_sr,
+                    output_audio_np,
+                )  # Keep original if calculation fails or no change
+                print(f"Skipping audio speed adjustment (factor: {speed_factor:.2f}).")
+            # --- End slowdown ---
+
+            print(f"Audio conversion successful. Final shape: {output_audio[1].shape}, Sample Rate: {output_sr}")
 
         else:
             print("\nGeneration finished, but no valid tokens were produced.")
@@ -299,16 +240,16 @@ with gr.Blocks(css=css) as demo:
                 max_new_tokens = gr.Slider(
                     label="Max New Tokens (Audio Length)",
                     minimum=860,
-                    maximum=2600,
-                    value=config.data.audio_length,  # Use config default if available, else fallback
+                    maximum=3072,
+                    value=model.config.data.audio_length,  # Use config default if available, else fallback
                     step=50,
                     info="Controls the maximum length of the generated audio (more tokens = longer audio).",
                 )
                 cfg_scale = gr.Slider(
                     label="CFG Scale (Guidance Strength)",
                     minimum=1.0,
-                    maximum=10.0,
-                    value=4.0,  # Default from inference.py
+                    maximum=5.0,
+                    value=3.0,  # Default from inference.py
                     step=0.1,
                     info="Higher values increase adherence to the text prompt.",
                 )
@@ -327,6 +268,22 @@ with gr.Blocks(css=css) as demo:
                     value=0.95,  # Default from inference.py
                     step=0.01,
                     info="Filters vocabulary to the most likely tokens cumulatively reaching probability P.",
+                )
+                cfg_filter_top_k = gr.Slider(
+                    label="CFG Filter Top K",
+                    minimum=15,
+                    maximum=50,
+                    value=35,  # Default to max as lower is slower
+                    step=1,
+                    info="Filters tokens for CFG guidance. Lower values can improve quality but slow down generation.",
+                )
+                speed_factor_slider = gr.Slider(
+                    label="Speed Factor",
+                    minimum=0.7,
+                    maximum=1.0,
+                    value=0.85,
+                    step=0.05,
+                    info="Adjusts the speed of the generated audio (1.0 = original speed).",
                 )
 
             run_button = gr.Button("Generate Audio", variant="primary")
@@ -351,6 +308,8 @@ with gr.Blocks(css=css) as demo:
             cfg_scale,
             temperature,
             top_p,
+            cfg_filter_top_k,
+            speed_factor_slider,
         ],
         outputs=[audio_output],  # Add status_output here if using it
         api_name="generate_audio",
@@ -368,6 +327,7 @@ with gr.Blocks(css=css) as demo:
             0.98,
             True,
             50,
+            1.0,
         ],
         [
             "You can also provide an audio prompt to guide the style. This example uses a prompt.",
@@ -378,6 +338,7 @@ with gr.Blocks(css=css) as demo:
             0.98,
             True,
             50,
+            1.0,
         ],
     ]
     # Filter out examples with missing prompt files
@@ -393,6 +354,8 @@ with gr.Blocks(css=css) as demo:
                 cfg_scale,
                 temperature,
                 top_p,
+                cfg_filter_top_k,
+                speed_factor_slider,
             ],
             outputs=[audio_output],  # Add status_output here if using it
             fn=run_inference,  # Function to run for examples
@@ -407,4 +370,4 @@ with gr.Blocks(css=css) as demo:
 if __name__ == "__main__":
     print("Launching Gradio interface...")
     # Add server_name="0.0.0.0" to listen on all interfaces if needed (e.g., for Docker)
-    demo.launch(share=True)
+    demo.launch(share=args.share)

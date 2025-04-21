@@ -203,12 +203,13 @@ class Dia:
     def generate(
         self,
         text: str,
-        cfg_scale: float,
-        temperature: float,
-        top_p: float,
-        use_cfg_filter: bool,
-        use_torch_compile: bool,
-        cfg_filter_top_k: int,
+        max_tokens: int | None = None,
+        cfg_scale: float = 3.0,
+        temperature: float = 0.7,
+        top_p: float = 0.95,
+        use_cfg_filter: bool = True,
+        use_torch_compile: bool = True,
+        cfg_filter_top_k: int = 100,
         audio_prompt_path: str | None = None,
     ) -> np.ndarray:
         """
@@ -222,7 +223,7 @@ class Dia:
         audio_eos_value = self.config.data.audio_eos_value
         audio_pad_value = self.config.data.audio_pad_value
         delay_pattern = self.config.data.delay_pattern
-        max_tokens = self.config.data.audio_length
+        max_tokens = self.config.data.audio_length if max_tokens is None else max_tokens
         delay_tensor = torch.tensor(delay_pattern, dtype=torch.long, device=self.device)
         self.model.eval()
 
@@ -353,7 +354,6 @@ class Dia:
 
         step = 0
         for step in range(current_step, current_step + max_tokens):
-            print(step)
             tgt_ids_Bx1xC = generated_BxTxC[:, step, :].unsqueeze(1)
             tgt_pos_Bx1 = torch.full(
                 (2, 1),
