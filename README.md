@@ -44,6 +44,15 @@ pip install uv
 uv run app.py
 ```
 
+or with your favourite container runtime (requires [nvidia-container-toolkit](https://github.com/NVIDIA/nvidia-container-toolkit)):
+
+```bash
+alias docker=podman
+mkdir -p .cache
+docker build . -t dia
+docker run --device nvidia.com/gpu=all -p 7860:7860 -v .cache:/root/.cache/huggingface dia
+```
+
 ## ⚙️ Usage
 
 ### As a Python Library
