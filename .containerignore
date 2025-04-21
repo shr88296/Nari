@@ -1,0 +1,7 @@
+.venv
+.cache
+Containerfile
+.gitignore
+example_prompt.mp3
+example
+images
