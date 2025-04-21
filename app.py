@@ -14,7 +14,9 @@ from dia.model import Dia
 
 # --- Global Setup ---
 parser = argparse.ArgumentParser(description="Gradio interface for Nari TTS")
-parser.add_argument("--device", type=str, default=None, help="Force device (e.g., 'cuda', 'mps', 'cpu')")
+parser.add_argument(
+    "--device", type=str, default=None, help="Force device (e.g., 'cuda', 'mps', 'cpu')"
+)
 parser.add_argument("--share", action="store_true", help="Enable Gradio sharing")
 
 args = parser.parse_args()
@@ -65,7 +67,6 @@ def run_inference(
 
     temp_txt_file_path = None
     temp_audio_prompt_path = None
-    # Default output: standard sample rate (use DAC's later), silent audio
     output_audio = (44100, np.zeros(1, dtype=np.float32))
 
     try:
@@ -73,11 +74,15 @@ def run_inference(
         if audio_prompt_input is not None:
             sr, audio_data = audio_prompt_input
             # Check if audio_data is valid
-            if audio_data is None or audio_data.size == 0 or audio_data.max() == 0:  # Check for silence/empty
+            if (
+                audio_data is None or audio_data.size == 0 or audio_data.max() == 0
+            ):  # Check for silence/empty
                 gr.Warning("Audio prompt seems empty or silent, ignoring prompt.")
             else:
                 # Save prompt audio to a temporary WAV file
-                with tempfile.NamedTemporaryFile(mode="wb", suffix=".wav", delete=False) as f_audio:
+                with tempfile.NamedTemporaryFile(
+                    mode="wb", suffix=".wav", delete=False
+                ) as f_audio:
                     temp_audio_prompt_path = f_audio.name  # Store path for cleanup
 
                     # Basic audio preprocessing for consistency
@@ -86,12 +91,16 @@ def run_inference(
                         max_val = np.iinfo(audio_data.dtype).max
                         audio_data = audio_data.astype(np.float32) / max_val
                     elif not np.issubdtype(audio_data.dtype, np.floating):
-                        gr.Warning(f"Unsupported audio prompt dtype {audio_data.dtype}, attempting conversion.")
+                        gr.Warning(
+                            f"Unsupported audio prompt dtype {audio_data.dtype}, attempting conversion."
+                        )
                         # Attempt conversion, might fail for complex types
                         try:
                             audio_data = audio_data.astype(np.float32)
                         except Exception as conv_e:
-                            raise gr.Error(f"Failed to convert audio prompt to float32: {conv_e}")
+                            raise gr.Error(
+                                f"Failed to convert audio prompt to float32: {conv_e}"
+                            )
 
                     # Ensure mono (average channels if stereo)
                     if audio_data.ndim > 1:
@@ -104,9 +113,13 @@ def run_inference(
                                 f"Audio prompt has unexpected shape {audio_data.shape}, taking first channel/axis."
                             )
                             audio_data = (
-                                audio_data[0] if audio_data.shape[0] < audio_data.shape[1] else audio_data[:, 0]
+                                audio_data[0]
+                                if audio_data.shape[0] < audio_data.shape[1]
+                                else audio_data[:, 0]
                             )
-                        audio_data = np.ascontiguousarray(audio_data)  # Ensure contiguous after slicing/mean
+                        audio_data = np.ascontiguousarray(
+                            audio_data
+                        )  # Ensure contiguous after slicing/mean
 
                     # Write using soundfile
                     try:
@@ -114,7 +127,9 @@ def run_inference(
                             temp_audio_prompt_path, audio_data, sr, subtype="FLOAT"
                         )  # Explicitly use FLOAT subtype
                         prompt_path_for_generate = temp_audio_prompt_path
-                        print(f"Created temporary audio prompt file: {temp_audio_prompt_path} (orig sr: {sr})")
+                        print(
+                            f"Created temporary audio prompt file: {temp_audio_prompt_path} (orig sr: {sr})"
+                        )
                     except Exception as write_e:
                         print(f"Error writing temporary audio file: {write_e}")
                         raise gr.Error(f"Failed to save audio prompt: {write_e}")
@@ -149,8 +164,12 @@ def run_inference(
             original_len = len(output_audio_np)
             # Ensure speed_factor is positive and not excessively small/large to avoid issues
             speed_factor = max(0.1, min(speed_factor, 5.0))
-            target_len = int(original_len / speed_factor)  # Target length based on speed_factor
-            if target_len != original_len and target_len > 0:  # Only interpolate if length changes and is valid
+            target_len = int(
+                original_len / speed_factor
+            )  # Target length based on speed_factor
+            if (
+                target_len != original_len and target_len > 0
+            ):  # Only interpolate if length changes and is valid
                 x_original = np.arange(original_len)
                 x_resampled = np.linspace(0, original_len - 1, target_len)
                 resampled_audio_np = np.interp(x_resampled, x_original, output_audio_np)
@@ -158,7 +177,9 @@ def run_inference(
                     output_sr,
                     resampled_audio_np.astype(np.float32),
                 )  # Use resampled audio
-                print(f"Resampled audio from {original_len} to {target_len} samples for {speed_factor:.2f}x speed.")
+                print(
+                    f"Resampled audio from {original_len} to {target_len} samples for {speed_factor:.2f}x speed."
+                )
             else:
                 output_audio = (
                     output_sr,
@@ -167,7 +188,9 @@ def run_inference(
                 print(f"Skipping audio speed adjustment (factor: {speed_factor:.2f}).")
             # --- End slowdown ---
 
-            print(f"Audio conversion successful. Final shape: {output_audio[1].shape}, Sample Rate: {output_sr}")
+            print(
+                f"Audio conversion successful. Final shape: {output_audio[1].shape}, Sample Rate: {output_sr}"
+            )
 
         else:
             print("\nGeneration finished, but no valid tokens were produced.")
@@ -189,13 +212,17 @@ def run_inference(
                 Path(temp_txt_file_path).unlink()
                 print(f"Deleted temporary text file: {temp_txt_file_path}")
             except OSError as e:
-                print(f"Warning: Error deleting temporary text file {temp_txt_file_path}: {e}")
+                print(
+                    f"Warning: Error deleting temporary text file {temp_txt_file_path}: {e}"
+                )
         if temp_audio_prompt_path and Path(temp_audio_prompt_path).exists():
             try:
                 Path(temp_audio_prompt_path).unlink()
                 print(f"Deleted temporary audio prompt file: {temp_audio_prompt_path}")
             except OSError as e:
-                print(f"Warning: Error deleting temporary audio prompt file {temp_audio_prompt_path}: {e}")
+                print(
+                    f"Warning: Error deleting temporary audio prompt file {temp_audio_prompt_path}: {e}"
+                )
 
     return output_audio
 
@@ -205,7 +232,7 @@ css = """
 #col-container {max-width: 90%; margin-left: auto; margin-right: auto;}
 """
 # Attempt to load default text from example.txt
-default_text = "Enter text for speech synthesis here."
+default_text = "[S1] Dia is an open weights text to dialogue model. \n[S2] You get full control over scripts and voices. \n[S1] Wow. Amazing. (laughs) \n[S2] Try it now on Git hub or Hugging Face."
 example_txt_path = Path("./example.txt")
 if example_txt_path.exists():
     try:
@@ -232,9 +259,7 @@ with gr.Blocks(css=css) as demo:
                 label="Audio Prompt (Optional)",
                 show_label=True,
                 sources=["upload", "microphone"],
-                type="numpy",  # Returns (sr, np.ndarray)
-                # Example: Add waveform visualization options if desired
-                # waveform_options=gr.WaveformOptions(waveform_color="#01C6FF", waveform_progress_color="#0066B2", show_duration=True)
+                type="numpy",
             )
             with gr.Accordion("Generation Parameters", open=False):
                 max_new_tokens = gr.Slider(
@@ -255,9 +280,9 @@ with gr.Blocks(css=css) as demo:
                 )
                 temperature = gr.Slider(
                     label="Temperature (Randomness)",
-                    minimum=0.1,
+                    minimum=1.0,
                     maximum=1.5,
-                    value=1.2,  # Default from inference.py
+                    value=1.3,  # Default from inference.py
                     step=0.05,
                     info="Lower values make the output more deterministic, higher values increase randomness.",
                 )
@@ -273,16 +298,16 @@ with gr.Blocks(css=css) as demo:
                     label="CFG Filter Top K",
                     minimum=15,
                     maximum=50,
-                    value=35,  # Default to max as lower is slower
+                    value=30,
                     step=1,
-                    info="Filters tokens for CFG guidance. Lower values can improve quality but slow down generation.",
+                    info="Top k filter for CFG guidance.",
                 )
                 speed_factor_slider = gr.Slider(
                     label="Speed Factor",
-                    minimum=0.7,
+                    minimum=0.8,
                     maximum=1.0,
-                    value=0.85,
-                    step=0.05,
+                    value=0.94,
+                    step=0.02,
                     info="Adjusts the speed of the generated audio (1.0 = original speed).",
                 )
 
@@ -291,12 +316,9 @@ with gr.Blocks(css=css) as demo:
         with gr.Column(scale=1):
             audio_output = gr.Audio(
                 label="Generated Audio",
-                type="numpy",  # Expects (sr, np.ndarray) from function
+                type="numpy",
                 autoplay=False,
-                # interactive=False # Output shouldn't be interactive as input
             )
-            # Add status or log output if desired
-            # status_output = gr.Textbox(label="Status", interactive=False, lines=3)
 
     # Link button click to function
     run_button.click(
@@ -316,33 +338,29 @@ with gr.Blocks(css=css) as demo:
     )
 
     # Add examples (ensure the prompt path is correct or remove it if example file doesn't exist)
-    example_prompt_path = "assets/example_prompt.wav"  # Adjust if needed
+    example_prompt_path = "./example_prompt.mp3"  # Adjust if needed
     examples_list = [
         [
-            "Hello, this is a test of the Nari text to speech system.",
+            "[S1] Oh fire! Oh my goodness! What's the procedure? What to we do people? The smoke could be coming through an air duct! \n[S2] Oh my god! Okay.. it's happening. Everybody stay calm! \n[S1] What's the procedure... \n[S2] Everybody stay fucking calm!!!... Everybody fucking calm down!!!!! \n[S1] No! No! If you touch the handle, if its hot there might be a fire down the hallway! ",
             None,
-            1000,
+            3072,
             3.0,
-            1.0,
-            0.98,
-            True,
-            50,
-            1.0,
+            1.3,
+            0.95,
+            35,
+            0.94,
         ],
         [
-            "You can also provide an audio prompt to guide the style. This example uses a prompt.",
+            "[S1] Open weights text to dialogue model. \n[S2] You get full control over scripts and voices. \n[S1] I'm biased, but I think we clearly won. \n[S2] Hard to disagree. (laughs) \n[S1] Thanks for listening to this demo. \n[S2] Try it now on Git hub and Hugging Face. \n[S1] If you liked our model, please give us a star and share to your friends. \n[S2] This was Nari Labs.",
             example_prompt_path if Path(example_prompt_path).exists() else None,
-            1500,
-            3.5,
-            1.0,
-            0.98,
-            True,
-            50,
-            1.0,
+            3072,
+            3.0,
+            1.3,
+            0.95,
+            35,
+            0.94,
         ],
     ]
-    # Filter out examples with missing prompt files
-    examples_list = [ex for ex in examples_list if ex[1] is not None or not Path(example_prompt_path).exists()]
 
     if examples_list:
         gr.Examples(
@@ -357,9 +375,9 @@ with gr.Blocks(css=css) as demo:
                 cfg_filter_top_k,
                 speed_factor_slider,
             ],
-            outputs=[audio_output],  # Add status_output here if using it
-            fn=run_inference,  # Function to run for examples
-            cache_examples=False,  # Caching might be slow or complex with models
+            outputs=[audio_output],
+            fn=run_inference,
+            cache_examples=False,
             label="Examples (Click to Run)",
         )
     else:
@@ -369,5 +387,4 @@ with gr.Blocks(css=css) as demo:
 # --- Launch the App ---
 if __name__ == "__main__":
     print("Launching Gradio interface...")
-    # Add server_name="0.0.0.0" to listen on all interfaces if needed (e.g., for Docker)
-    demo.launch(share=args.share)
+    demo.launch(share=True)

@@ -1,6 +1,7 @@
 # Nari TTS
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 <!-- Add other badges here: PyPI version, Hugging Face model, etc. -->
 
 A Text-to-Speech model implementation, refactored into a Python library with CLI and Gradio interfaces.
@@ -9,27 +10,25 @@ _(Add a more detailed description of the model and its capabilities here)_.
 
 ## Features
 
-*   **Python Library:** Core functionalities accessible via `import nari_tts`.
-*   **Command-Line Interface (CLI):** Generate audio from text using `scripts/infer.py`.
-*   **Gradio Web UI:** Interactive demo interface via `app/app.py`.
-*   **Hugging Face Hub Integration:** Load models directly from the Hub (`buttercrab/nari-tts` placeholder).
-*   **Docker Support:** Run the CLI or Gradio app in isolated containers.
-    *   `Dockerfile.cli`
-    *   `Dockerfile.app`
-    *   `docker-compose.yml` (for Gradio app)
-*   **Audio Prompting:** Guide speech style using an audio prompt (optional).
+- **Python Library:** Core functionalities accessible via `import nari_tts`.
+- **Command-Line Interface (CLI):** Generate audio from text using `scripts/infer.py`.
+- **Gradio Web UI:** Interactive demo interface via `app/app.py`.
+- **Hugging Face Hub Integration:** Load models directly from the Hub (`buttercrab/nari-tts` placeholder).
+- **Docker Support:** Run the CLI or Gradio app in isolated containers.
+  - `Dockerfile.cli`
+  - `Dockerfile.app`
+  - `docker-compose.yml` (for Gradio app)
+- **Audio Prompting:** Guide speech style using an audio prompt (optional).
 
 ## Installation
 
 ### Prerequisites
 
-*   Python >= 3.10
-*   PyTorch >= 2.6.0 (check compatibility with your CUDA version if applicable)
-*   `uv` (optional, for faster dependency installation: `pip install uv`)
+- Python >= 3.10
+- PyTorch >= 2.6.0 (check compatibility with your CUDA version if applicable)
+- `uv` (optional, for faster dependency installation: `pip install uv`)
 
-### Installing the Library
-
-**1. From Source (Recommended for Development):**
+### Installation
 
 Clone the repository and install in editable mode:
 
@@ -45,23 +44,7 @@ pip install -e .
 uv pip install -e .
 ```
 
-**2. From PyPI (Once Published):**
-
-```bash
-pip install nari-tts
-```
-
-**3. Installing Dependencies Separately:**
-
-You can install dependencies using `uv` or `pip` with the provided files:
-
-```bash
-# Using uv (recommended)
-uv pip install -r requirements.txt
-
-# Using pip
-pip install -r requirements.txt
-```
+pypi package coming soon.
 
 ## Usage
 
@@ -94,7 +77,7 @@ dac_model = dac.DAC.load(dac_model_path).to(device)
 dac_model.eval()
 dac_sample_rate = dac_model.sample_rate
 
-# --- Generate --- 
+# --- Generate ---
 print(f\"Generating audio for: '{INPUT_TEXT}'\")
 generated_codes = generate(
     model=model,
@@ -102,11 +85,11 @@ generated_codes = generate(
     text=INPUT_TEXT,
     max_tokens=config.data.audio_length, # Or specify a number
     cfg_scale=3.0,
-    temperature=1.0,
+    temperature=1.2,
     top_p=0.95,
     use_cfg_filter=True,
     device=device,
-    cfg_filter_top_k=50,
+    cfg_filter_top_k=35,
     # audio_prompt_path=\"path/to/prompt.wav\", # Optional
     dac_model=dac_model
 )
@@ -204,7 +187,8 @@ docker run --rm -v \"$(pwd)/output:/app/output\" nari-tts-cli:latest \
 # Mount ~/.cache/huggingface to reuse downloads:
 # docker run --rm -v \"$(pwd)/output:/app/output\" -v \"~/.cache/huggingface:/root/.cache/huggingface\" nari-tts-cli:latest ...
 ```
-*(Note: Adjust volume mounts as needed for your OS and paths.)*
+
+_(Note: Adjust volume mounts as needed for your OS and paths.)_
 
 **3. Run Gradio App Container (using Docker Compose):**
 
@@ -233,13 +217,13 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## TODO / Future Work
 
-*   Refine Hugging Face Hub integration (e.g., `push_to_hub`).
-*   Improve documentation and add API reference.
-*   Add unit and integration tests.
-*   Optimize inference speed.
-*   Publish to PyPI.
-*   Enhance Gradio UI (e.g., add examples, status updates).
-*   Clean up remaining `src/` directory contents.
+- Refine Hugging Face Hub integration (e.g., `push_to_hub`).
+- Improve documentation and add API reference.
+- Add unit and integration tests.
+- Optimize inference speed.
+- Publish to PyPI.
+- Enhance Gradio UI (e.g., add examples, status updates).
+- Clean up remaining `src/` directory contents.
 
 ## Contributing
 
