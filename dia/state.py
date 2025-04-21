@@ -1,6 +1,6 @@
 from dataclasses import dataclass
+
 import torch
-from pydantic import BaseModel
 
 from .config import DiaConfig
 
