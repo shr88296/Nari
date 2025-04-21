@@ -336,7 +336,7 @@ def generate(
         )
 
         for i, layer_cache in enumerate(decoder_self_attention_cache):
-            layer_cache.update_cache(new_cache[i][0], new_cache[i][1])
+            layer_cache.update(new_cache[i][0], new_cache[i][1])
 
         V = config.model.tgt_vocab_size
         logits_last_BxCxV = logits_Bx1xCxV[:, -1, :, :]  # B, C, V

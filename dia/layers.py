@@ -1,20 +1,11 @@
-import math
-from typing import Any, Iterable
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn import RMSNorm
 
-from .config import DiaConfig, InferenceParams
-
-
-def _canonicalize_tuple(x: Iterable[int] | int) -> tuple[int, ...]:
-    if isinstance(x, Iterable):
-        return tuple(x)
-    else:
-        return (x,)
+from .config import DiaConfig
+from .state import DecoderInferenceState, EncoderInferenceState, KVCache
 
 
 def _normalize_axes(axes: tuple[int, ...], ndim: int) -> tuple[int, ...]:
@@ -62,45 +53,18 @@ class DenseGeneral(nn.Module):
         device: torch.device | None = None,
     ):
         super().__init__()
-        self.in_shapes: tuple[int, ...] = _canonicalize_tuple(in_shapes)
-        self.out_features: tuple[int, ...] = _canonicalize_tuple(out_features)
-        self.axis_tuple: tuple[int, ...] = _canonicalize_tuple(axis)
-        self.dtype: torch.dtype | None = dtype  # Store computation dtype if specified
+        self.in_shapes = in_shapes
+        self.out_features = out_features
+        self.axis = axis
+        self.dtype = dtype
+        self.kernel_shape = self.in_shapes + self.out_features
 
         factory_kwargs = {"device": device, "dtype": weight_dtype}
-
-        if len(self.in_shapes) != len(self.axis_tuple):
-            raise ValueError(
-                f"Length of in_shapes {self.in_shapes} ({len(self.in_shapes)}) must match "
-                f"length of axis {self.axis_tuple} ({len(self.axis_tuple)})"
-            )
-
-        self.kernel_shape: tuple[int, ...] = self.in_shapes + self.out_features
-
         self.weight = nn.Parameter(torch.empty(self.kernel_shape, **factory_kwargs))
         self.register_parameter("bias", None)
 
-        self.reset_parameters()  # Initialize parameters
-
-    def reset_parameters(self) -> None:
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        if self.bias is not None:
-            fan_in = 1
-            for dim_size in self.in_shapes:
-                fan_in *= dim_size
-            if fan_in > 0:
-                bound = 1 / math.sqrt(fan_in)
-                nn.init.uniform_(self.bias, -bound, bound)
-            else:
-                nn.init.zeros_(self.bias)
-
     def forward(self, inputs: Tensor) -> Tensor:
-        if self.weight is None:
-            raise RuntimeError("Weight parameter not initialized.")
-        try:
-            norm_axis = _normalize_axes(self.axis_tuple, inputs.ndim)
-        except IndexError as e:
-            raise ValueError(f"Axis {self.axis_tuple} out of bounds for input ndim {inputs.ndim}") from e
+        norm_axis = _normalize_axes(self.axis, inputs.ndim)
         kernel_contract_axes = tuple(range(len(norm_axis)))
 
         output = torch.tensordot(
@@ -205,37 +169,6 @@ class RotaryEmbedding(nn.Module):
         return torch.cat((first_part, second_part), dim=-1)
 
 
-class KVCache:
-    def __init__(self, num_heads, max_len, head_dim, device, k=None, v=None):
-        self.k = torch.zeros((2, num_heads, max_len, head_dim), device=device) if k is None else k
-        self.v = torch.zeros((2, num_heads, max_len, head_dim), device=device) if v is None else v
-        self.current_idx = 0
-        self.max_len = max_len
-
-    def get_kv_for_attention(self, current_k, current_v):
-        if self.current_idx == 0:
-            return current_k, current_v
-        else:
-            past_k = self.k[:, :, : self.current_idx, :]
-            past_v = self.v[:, :, : self.current_idx, :]
-            attn_k = torch.cat((past_k, current_k), dim=2)
-            attn_v = torch.cat((past_v, current_v), dim=2)
-            return attn_k, attn_v
-
-    def update_cache(self, k, v):
-        assert self.current_idx < self.max_len
-        self.k[:, :, self.current_idx : self.current_idx + 1, :] = k
-        self.v[:, :, self.current_idx : self.current_idx + 1, :] = v
-        self.current_idx += 1
-
-    def prefill_kv(self, k, v):
-        prefill_len = k.shape[2]
-        assert prefill_len <= self.max_len
-        self.k[:, :, :prefill_len, :] = k
-        self.v[:, :, :prefill_len, :] = v
-        self.current_idx = prefill_len
-
-
 class Attention(nn.Module):
     """Attention using DenseGeneral."""
 
@@ -247,7 +180,6 @@ class Attention(nn.Module):
         num_query_heads: int,
         num_kv_heads: int,
         head_dim: int,
-        dropout_rate: float,
         is_cross_attn: bool = False,
         out_embed_dim: int | None = None,
     ):
@@ -256,7 +188,6 @@ class Attention(nn.Module):
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
         self.is_cross_attn = is_cross_attn
-        self.dropout_rate = dropout_rate
         compute_dtype = _str_to_dtype(config.training.dtype)
         weight_dtype = _str_to_dtype(config.model.weight_dtype)
         self.output_dim = out_embed_dim if out_embed_dim is not None else q_embed_dim
@@ -311,8 +242,7 @@ class Attention(nn.Module):
         kv_positions: torch.Tensor | None = None,  # (B, S)
         attn_mask: torch.Tensor | None = None,  # None in Decoder Self Attention, Valid mask in Others
         cache: KVCache | None = None,  # None in Encoder, KVCache in Decoder
-        prefill: bool = False,  # True only when prefilling KV Cache
-    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+    ) -> torch.Tensor:
         """
         Performs attention calculation with optional KV caching.
 
@@ -333,27 +263,17 @@ class Attention(nn.Module):
         if kv_positions is None:
             kv_positions = q_positions
         original_dtype = Xq.dtype
+        seq_len = Xq.shape[1]
 
         Xq_BxTxNxH = self.q_proj(Xq)
         Xq_BxTxNxH = self.rotary_emb(Xq_BxTxNxH, position=q_positions)
         Xq_BxNxTxH = Xq_BxTxNxH.transpose(1, 2)
 
-        # Input values into attention calculation
         attn_k: torch.Tensor | None = None
         attn_v: torch.Tensor | None = None
-        new_kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None
 
-        # Decoder Cross Attention
-        if self.is_cross_attn:
-            # Directly use cache (no need to check index)
+        if self.is_cross_attn and cache is not None and cache.current_idx == 0:
             attn_k, attn_v = cache.k, cache.v
-            if attn_k.shape[1] != self.num_query_heads or attn_v.shape[1] != self.num_query_heads:
-                raise ValueError(
-                    f"Cross-attention cache head dimension ({attn_k.shape[1]}) "
-                    f"does not match num_query_heads ({self.num_query_heads}). "
-                    "Cache should be pre-repeated for GQA."
-                )
-        # Self Attention
         else:
             Xk_BxSxKxH = self.k_proj(Xkv)  # (B, S, K, H)
             Xv_BxSxKxH = self.v_proj(Xkv)  # (B, S, K, H)
@@ -363,42 +283,26 @@ class Attention(nn.Module):
             Xv_BxKxSxH = Xv_BxSxKxH.transpose(1, 2)  # (B, K, S, H)
             # S=1 for Decode Step
 
-            if self.num_gqa_groups > 1:
-                Xk_BxNxSxH = Xk_BxKxSxH.repeat_interleave(self.num_gqa_groups, dim=1)
-                Xv_BxNxSxH = Xv_BxKxSxH.repeat_interleave(self.num_gqa_groups, dim=1)
-            else:
-                Xk_BxNxSxH = Xk_BxKxSxH
-                Xv_BxNxSxH = Xv_BxKxSxH
-
-            # Encoder Self Attention
             if cache is None:
-                attn_k = Xk_BxNxSxH
-                attn_v = Xv_BxNxSxH
-            # Decoder Self Attention
+                attn_k = Xk_BxKxSxH
+                attn_v = Xv_BxKxSxH
             else:
-                # In prefill mode, we fill in cache until prefill length
-                if prefill:
-                    attn_k, attn_v = Xk_BxNxSxH, Xv_BxNxSxH
-                    cache.prefill_kv(attn_k, attn_v)
-                # In decode step, we add current K/V to cache step by step
-                else:
-                    new_kv_cache = Xk_BxNxSxH, Xv_BxNxSxH
-                    attn_k, attn_v = cache.get_kv_for_attention(Xk_BxNxSxH, Xv_BxNxSxH)
+                attn_k, attn_v = cache.update(Xk_BxKxSxH, Xv_BxKxSxH)
 
-        # Dot Product Attention
+        # since attn_mask is broadcasted, we can apply this when seq_len > 1
         attn_output = F.scaled_dot_product_attention(
             Xq_BxNxTxH,
             attn_k,
             attn_v,
             attn_mask=attn_mask,
-            dropout_p=0.0,
-            scale=1.0,
+            enable_gqa=self.num_gqa_groups > 1,
+            is_causal=attn_mask is None and not self.is_cross_attn and seq_len > 1,
         )
 
         attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, N, H)
         output = self.o_proj(attn_output)
 
-        return output.to(original_dtype), new_kv_cache
+        return output.to(original_dtype)
 
 
 class EncoderLayer(nn.Module):
@@ -416,6 +320,7 @@ class EncoderLayer(nn.Module):
             eps=model_config.normalization_layer_epsilon,
             dtype=torch.float32,
         )
+
         self.self_attention = Attention(
             config=config,
             q_embed_dim=embed_dim,
@@ -423,15 +328,16 @@ class EncoderLayer(nn.Module):
             num_query_heads=enc_config.n_head,
             num_kv_heads=enc_config.n_head,
             head_dim=enc_config.head_dim,
-            dropout_rate=model_config.dropout,
             is_cross_attn=False,
             out_embed_dim=embed_dim,
         )
+
         self.post_sa_norm = RMSNorm(
             embed_dim,
             eps=model_config.normalization_layer_epsilon,
             dtype=torch.float32,
         )
+
         self.mlp = MlpBlock(
             config=config,
             embed_dim=embed_dim,
@@ -442,18 +348,17 @@ class EncoderLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        src_positions: torch.Tensor | None = None,
-        attn_mask: torch.Tensor | None = None,
+        state: EncoderInferenceState,
     ) -> torch.Tensor:
         residual = x
         x_norm = self.pre_sa_norm(x)
 
-        sa_out, _ = self.self_attention(
+        sa_out = self.self_attention(
             Xq=x_norm,
             Xkv=x_norm,
-            q_positions=src_positions,
-            kv_positions=src_positions,
-            attn_mask=attn_mask,
+            q_positions=state.positions,
+            kv_positions=state.positions,
+            attn_mask=state.attn_mask,
         )
         x = residual + sa_out
 
@@ -480,7 +385,9 @@ class Encoder(nn.Module):
             enc_config.n_embd,
             dtype=compute_dtype,
         )
+
         self.layers = nn.ModuleList([EncoderLayer(config=config) for _ in range(enc_config.n_layer)])
+
         self.norm = RMSNorm(
             enc_config.n_embd,
             eps=model_config.normalization_layer_epsilon,
@@ -490,19 +397,14 @@ class Encoder(nn.Module):
     def forward(
         self,
         x_ids: torch.Tensor,
-        src_positions: torch.Tensor | None = None,
-        attn_mask: torch.Tensor | None = None,
+        state: EncoderInferenceState,
     ) -> torch.Tensor:
         x = self.embedding(x_ids)
 
         for layer in self.layers:
-            x = layer(
-                x,
-                src_positions=src_positions,
-                attn_mask=attn_mask,
-            )
-        x = self.norm(x)
-        return x
+            x = layer(x, state)
+
+        return self.norm(x)
 
 
 class DecoderLayer(nn.Module):
@@ -542,7 +444,6 @@ class DecoderLayer(nn.Module):
             num_query_heads=dec_config.gqa_query_heads,
             num_kv_heads=dec_config.kv_heads,
             head_dim=dec_config.gqa_head_dim,
-            dropout_rate=model_config.dropout,
             is_cross_attn=False,
             out_embed_dim=dec_embed_dim,
         )
@@ -554,7 +455,6 @@ class DecoderLayer(nn.Module):
             num_query_heads=dec_config.cross_query_heads,
             num_kv_heads=dec_config.cross_query_heads,
             head_dim=dec_config.cross_head_dim,
-            dropout_rate=model_config.dropout,
             is_cross_attn=True,
             out_embed_dim=dec_embed_dim,
         )
@@ -566,53 +466,36 @@ class DecoderLayer(nn.Module):
             use_pre_norm=dec_config.use_pre_norm,
         )
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        encoder_out: torch.Tensor,
-        tgt_positions: torch.Tensor,
-        src_positions: torch.Tensor | None,
-        self_attn_mask: torch.Tensor,
-        cross_attn_mask: torch.Tensor,
-        self_attn_cache: KVCache,
-        cross_attn_cache: KVCache,
-        prefill: bool = False,
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, layer_idx: int, state: DecoderInferenceState) -> torch.Tensor:
         residual = x
         x_norm = self.pre_sa_norm(x)
-
-        sa_out, new_kv_cache = self.self_attention(
+        sa_out = self.self_attention(
             Xq=x_norm,  # (2, 1, D)
             Xkv=x_norm,  # (2, 1, D)
-            q_positions=tgt_positions,  # (2, 1)
-            kv_positions=tgt_positions,  # (2, 1)
-            attn_mask=self_attn_mask,  # (2, 1, 1, S_max)
-            cache=self_attn_cache,
-            prefill=prefill,
+            q_positions=state.dec_positions,  # (2, 1)
+            kv_positions=state.dec_positions,  # (2, 1)
+            cache=state.self_attn_cache[layer_idx],
         )
-
         x = residual + sa_out
 
-        # 2. Cross-Attention
         residual = x
         x_norm = self.pre_ca_norm(x)
-        ca_out, _ = self.cross_attention(
+        ca_out = self.cross_attention(
             Xq=x_norm,
-            Xkv=encoder_out,
-            q_positions=tgt_positions,
-            kv_positions=src_positions,
-            attn_mask=cross_attn_mask,
-            cache=cross_attn_cache,
+            Xkv=state.enc_out,
+            q_positions=state.dec_positions,
+            kv_positions=state.enc_positions,
+            attn_mask=state.dec_cross_attn_mask,
+            cache=state.cross_attn_cache[layer_idx],
         )
         x = residual + ca_out
 
-        # 3. MLP
         residual = x
         x_norm = self.pre_mlp_norm(x)
         mlp_out = self.mlp(x_norm)
         x = residual + mlp_out
 
-        return x, new_kv_cache
+        return x
 
 
 class Decoder(nn.Module):
@@ -636,14 +519,15 @@ class Decoder(nn.Module):
                 for _ in range(self.num_channels)
             ]
         )
+
         self.layers = nn.ModuleList([DecoderLayer(config=config) for _ in range(self.num_layers)])
+
         self.norm = RMSNorm(
             dec_config.n_embd,
             eps=model_config.normalization_layer_epsilon,
             dtype=torch.float32,
         )
 
-        # Final Logits Projection using DenseGeneral
         self.logits_dense = DenseGeneral(
             in_shapes=(dec_config.n_embd,),
             out_features=(self.num_channels, model_config.tgt_vocab_size),
@@ -651,87 +535,36 @@ class Decoder(nn.Module):
             dtype=(torch.float32 if train_config.logits_dot_in_fp32 else compute_dtype),
             weight_dtype=weight_dtype,
         )
+
         self.logits_in_fp32 = train_config.logits_dot_in_fp32
 
-    def precompute_cross_attention_kv(
-        self,
-        encoder_out: torch.Tensor,  # (B, S, E)
-        src_positions: torch.Tensor | None,  # (B, S)
-        inference_params: InferenceParams,
-    ) -> list[KVCache]:
-        """
-        Computes the Key and Value tensors for cross-attention for each layer from the encoder output.
-        """
-        per_layer_kv_cache: list[KVCache] = []
-
-        for layer in self.layers:
-            cross_attn_module = layer.cross_attention
-            k_proj = cross_attn_module.k_proj(encoder_out)
-            v_proj = cross_attn_module.v_proj(encoder_out)
-
-            k_proj = cross_attn_module.rotary_emb(k_proj, position=src_positions)
-            k = k_proj.transpose(1, 2)
-            v = v_proj.transpose(1, 2)
-
-            per_layer_kv_cache.append(
-                KVCache(
-                    cross_attn_module.num_kv_heads,
-                    inference_params.max_seq_len,
-                    cross_attn_module.head_dim,
-                    inference_params.device,
-                    k=k,
-                    v=v,
-                )
-            )
-
-        return per_layer_kv_cache
-
-    def decode_step(
-        self,
-        tgt_ids_Bx1xC: torch.Tensor,  # [B, 1, C]
-        tgt_pos_Bx1: torch.Tensor,  # [B, 1]
-        encoder_out: torch.Tensor,  # [B, S, E]
-        self_attn_mask: Any,  # None
-        cross_attn_mask: torch.Tensor,  # [B, 1, 1, S]
-        self_attention_cache: list[KVCache],
-        cross_attention_cache: list[KVCache],
-    ) -> tuple[torch.Tensor, list[tuple[torch.Tensor, torch.Tensor] | None]]:
+    def decode_step(self, tgt_ids_Bx1xC: torch.Tensor, state: DecoderInferenceState) -> torch.Tensor:
         """
         Performs a single decoding step, managing KV caches layer by layer.
+
+        Args:
+            state: The current decoder inference state, containing caches, etc.
+            tgt_ids_Bx1xC: The input token IDs for the current step [B, 1, C].
 
         Returns:
             A tuple containing:
             - logits_Bx1xCV: The final output logits for the current step (B, 1, C*V), cast to float32.
         """
-        assert self_attn_mask is None, "Self-attention mask should be None, kept for pattern"
 
         x = None
+
         for i in range(self.num_channels):
             channel_tokens = tgt_ids_Bx1xC[..., i]
             channel_embed = self.embeddings[i](channel_tokens)
             x = channel_embed if x is None else x + channel_embed
 
-        new_cache = []
-
         for i, layer in enumerate(self.layers):
-            self_cache = self_attention_cache[i]
-            cross_cache = cross_attention_cache[i]
-            x, new_kv_cache = layer(
-                x,  # (2, 1, D)
-                encoder_out,  # (2, S, E)
-                src_positions=None,  # CA KV is already computed
-                tgt_positions=tgt_pos_Bx1,  # (2, 1)
-                self_attn_mask=None,
-                cross_attn_mask=cross_attn_mask,
-                self_attn_cache=self_cache,
-                cross_attn_cache=cross_cache,
-            )
-            new_cache.append(new_kv_cache)
+            x = layer(x, i, state)
 
         x = self.norm(x)
-        logits_Bx1xCxV = self.logits_dense(x)
 
-        return logits_Bx1xCxV.to(torch.float32), new_cache
+        logits_Bx1xCxV = self.logits_dense(x)
+        return logits_Bx1xCxV.to(torch.float32)
 
     def forward(
         self,
@@ -778,7 +611,7 @@ class Decoder(nn.Module):
             x = channel_embed if x is None else x + channel_embed
 
         for i, layer in enumerate(self.layers):
-            x, _ = layer(
+            x = layer(
                 x,
                 encoder_out,
                 tgt_positions=tgt_positions,
@@ -787,7 +620,6 @@ class Decoder(nn.Module):
                 cross_attn_mask=cross_attn_mask,
                 self_attn_cache=self_attention_cache[i],
                 cross_attn_cache=cross_attention_cache[i],
-                prefill=True,
             )
 
         # Final Norm

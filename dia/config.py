@@ -91,9 +91,9 @@ class DecoderConfig(BaseModel, frozen=True):
         n_embd: Embedding dimension.
         n_hidden: Hidden dimension size in the MLP layers.
         gqa_query_heads: Number of query heads for grouped-query self-attention.
+        kv_heads: Number of key/value heads for grouped-query self-attention.
+        gqa_head_dim: Dimension per query head for grouped-query self-attention.
         cross_query_heads: Number of query heads for cross-attention.
-        kv_heads: Number of key/value heads (shared in GQA and cross-attention).
-        gqa_head_dim: Dimension per GQA head.
         cross_head_dim: Dimension per cross-attention head.
         mlp_activations: List of activation functions for the MLP layers.
         use_pre_norm: Whether to use pre-normalization.
@@ -103,9 +103,9 @@ class DecoderConfig(BaseModel, frozen=True):
     n_embd: int = Field(gt=0)
     n_hidden: int = Field(gt=0)
     gqa_query_heads: int = Field(gt=0)
-    cross_query_heads: int = Field(gt=0)
     kv_heads: int = Field(gt=0)
     gqa_head_dim: int = Field(gt=0)
+    cross_query_heads: int = Field(gt=0)
     cross_head_dim: int = Field(gt=0)
     mlp_activations: list[str] = Field(default=["silu", "linear"])
     use_pre_norm: bool = Field(default=False)
@@ -207,44 +207,3 @@ class DiaConfig(BaseModel, frozen=True):
             return cls.model_validate_json(content)
         except FileNotFoundError:
             return None
-
-
-def _str_to_dtype(dtype_str: str) -> torch.dtype | None:
-    # Allow None for default behavior
-    if dtype_str is None or dtype_str.lower() == "none":
-        return None
-    if dtype_str == "float32":
-        return torch.float32
-    elif dtype_str == "float16":
-        return torch.float16
-    elif dtype_str == "bfloat16":
-        return torch.bfloat16
-    else:
-        raise ValueError(f"Unsupported dtype string: {dtype_str}")
-
-
-@dataclass
-class InferenceParams:
-    """Parameters specifically for inference."""
-
-    max_seq_len: int
-    device: torch.device
-    dtype: torch.dtype
-
-    @classmethod
-    def from_config(cls, config: "DiaConfig", device: str | torch.device = "cpu") -> "InferenceParams":
-        """Creates InferenceParams from DiaConfig and a device."""
-        if isinstance(device, str):
-            device = torch.device(device)
-
-        # Extract dtype from training config
-        compute_dtype = _str_to_dtype(config.training.dtype)
-        if compute_dtype is None:
-            # Default to float32 if not specified or None
-            # You might want to log a warning here
-            compute_dtype = torch.float32
-
-        # Assuming config structure based on model.py usage
-        max_len = config.data.audio_length
-
-        return cls(max_seq_len=max_len, device=device, dtype=compute_dtype)
