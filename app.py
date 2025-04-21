@@ -10,7 +10,6 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from dia.inference import codebook_to_audio, generate
 from dia.model import Dia
 
 
