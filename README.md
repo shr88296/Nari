@@ -1,31 +1,35 @@
-# Nari TTS
+# Dia
 
+[![Join us on Discord](https://img.shields.io/badge/Discord-Join%20Chat-7289DA?logo=discord)](https://discord.gg/pgdB5YRe)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 <!-- Add other badges here: PyPI version, Hugging Face model, etc. -->
 
-A Text-to-Speech model implementation, refactored into a Python library with CLI and Gradio interfaces.
+Dia is a 1.6B parameter speech generation model created by Nari Labs. Dia can generate highly realistic dialogue from a transcript. You can condition the output on audio, enabling emotion and tone control. The model can also produce nonverbal communications like laughter, coughing, clearing throat, etc.
 
-_(Add a more detailed description of the model and its capabilities here)_.
+To accelerate research, we are providing access to pretrained model checkpoints and inference code. The model weights are hosted on [Hugging Face](https://huggingface.co/NariLabs/Dia).
+
+[Demo Page](https://yummy-fir-7a4.notion.site/dia-demo) comparing our model to [ElevenLabs Studio](https://elevenlabs.io/studio) and [Sesame CSM-1B](https://github.com/SesameAILabs/csm).
 
 ## Features
 
-*   **Python Library:** Core functionalities accessible via `import nari_tts`.
-*   **Command-Line Interface (CLI):** Generate audio from text using `scripts/infer.py`.
-*   **Gradio Web UI:** Interactive demo interface via `app/app.py`.
-*   **Hugging Face Hub Integration:** Load models directly from the Hub (`buttercrab/nari-tts` placeholder).
-*   **Docker Support:** Run the CLI or Gradio app in isolated containers.
-    *   `Dockerfile.cli`
-    *   `Dockerfile.app`
-    *   `docker-compose.yml` (for Gradio app)
-*   **Audio Prompting:** Guide speech style using an audio prompt (optional).
+- **Python Library:** Core functionalities accessible via `import nari_tts`.
+- **Command-Line Interface (CLI):** Generate audio from text using `scripts/infer.py`.
+- **Gradio Web UI:** Interactive demo interface via `app/app.py`.
+- **Hugging Face Hub Integration:** Load models directly from the Hub (`buttercrab/nari-tts` placeholder).
+- **Docker Support:** Run the CLI or Gradio app in isolated containers.
+  - `Dockerfile.cli`
+  - `Dockerfile.app`
+  - `docker-compose.yml` (for Gradio app)
+- **Audio Prompting:** Guide speech style using an audio prompt (optional).
 
 ## Installation
 
 ### Prerequisites
 
-*   Python >= 3.10
-*   PyTorch >= 2.6.0 (check compatibility with your CUDA version if applicable)
-*   `uv` (optional, for faster dependency installation: `pip install uv`)
+- Python >= 3.10
+- PyTorch >= 2.6.0 (check compatibility with your CUDA version if applicable)
+- `uv` (optional, for faster dependency installation: `pip install uv`)
 
 ### Installing the Library
 
@@ -94,7 +98,7 @@ dac_model = dac.DAC.load(dac_model_path).to(device)
 dac_model.eval()
 dac_sample_rate = dac_model.sample_rate
 
-# --- Generate --- 
+# --- Generate ---
 print(f\"Generating audio for: '{INPUT_TEXT}'\")
 generated_codes = generate(
     model=model,
@@ -204,7 +208,8 @@ docker run --rm -v \"$(pwd)/output:/app/output\" nari-tts-cli:latest \
 # Mount ~/.cache/huggingface to reuse downloads:
 # docker run --rm -v \"$(pwd)/output:/app/output\" -v \"~/.cache/huggingface:/root/.cache/huggingface\" nari-tts-cli:latest ...
 ```
-*(Note: Adjust volume mounts as needed for your OS and paths.)*
+
+_(Note: Adjust volume mounts as needed for your OS and paths.)_
 
 **3. Run Gradio App Container (using Docker Compose):**
 
@@ -227,20 +232,32 @@ docker compose down
 
 _(Add details about the model architecture, training data, expected quality, and link to the Hugging Face model card here)_.
 
+## Disclaimer
+
+This project offers a high-fidelity speech generation model intended solely for research and educational use. The following uses are **strictly forbidden**:
+
+- **Identity Misuse**: Do not produce audio resembling real individuals without permission.
+- **Deceptive Content**: Do not use this model to generate misleading content (e.g. fake news)
+- **Illegal or Malicious Use**: Do not use this model for activities that are illegal or intended to cause harm.
+
+By using this model, you agree to uphold relevant legal standards and ethical responsibilities. We **are not responsible** for any misuse and firmly oppose any unethical usage of this technology.
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## TODO / Future Work
 
-*   Refine Hugging Face Hub integration (e.g., `push_to_hub`).
-*   Improve documentation and add API reference.
-*   Add unit and integration tests.
-*   Optimize inference speed.
-*   Publish to PyPI.
-*   Enhance Gradio UI (e.g., add examples, status updates).
-*   Clean up remaining `src/` directory contents.
+- Optimize inference speed.
+- Add quantization for memory efficiency.
 
 ## Contributing
 
-_(Add contribution guidelines if desired)._
+We are a tiny team of 1 full-time and 1 part-time research-engineers. We are extra-welcome to any contributions!
+Join our [Discord Server](https://discord.gg/pgdB5YRe) for discussions.
+
+## Acknowledgements
+
+- We thank the [Google TPU Research Cloud program](https://sites.research.google/trc/about/) for providing computation resources.
+- Our work was heavily inspired by [SoundStorm](https://arxiv.org/abs/2305.09636) and [Parakeet](https://jordandarefsky.com/blog/2024/parakeet/).
+- "Nari" is a pure Korean word for lily, hence the logo.
