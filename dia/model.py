@@ -109,9 +109,7 @@ class Dia:
         return dia
 
     @classmethod
-    def from_pretrained(
-        cls, model_name: str = "nari-labs/Dia-1.6B", device: torch.device | None = None
-    ) -> "Dia":
+    def from_pretrained(cls, model_name: str = "nari-labs/Dia-1.6B", device: torch.device | None = None) -> "Dia":
         """Loads the Dia model from a Hugging Face Hub repository.
 
         Downloads the configuration and checkpoint files from the specified
@@ -255,7 +253,6 @@ class Dia:
         encoder_out = self.model.encoder(
             x_ids=src_BxS,
             src_positions=src_positions_BxS,
-            deterministic=True,
             attn_mask=enc_self_attn_mask_Bx1xSxS,
         )  # Shape: (B, S, E)
 
@@ -269,7 +266,7 @@ class Dia:
         for _ in range(self.model.decoder.num_layers):
             decoder_self_attention_cache.append(
                 KVCache(
-                    self.config.model.decoder.gqa_query_heads,
+                    self.config.model.decoder.kv_heads,
                     max_tokens,
                     self.config.model.decoder.gqa_head_dim,
                     self.device,
@@ -317,7 +314,6 @@ class Dia:
                 encoder_out=encoder_out,
                 tgt_positions=prefill_tgt_pos,
                 src_positions=src_positions_BxS,
-                deterministic=True,
                 self_attn_mask=prefill_self_attn_mask,
                 cross_attn_mask=prefill_cross_attn_mask,
                 self_attention_cache=decoder_self_attention_cache,
@@ -361,6 +357,10 @@ class Dia:
             src_padding_mask_BxS,  # Key mask [B, S]
             is_causal=False,
         )  # [B, 1, 1, S]
+
+        import time
+
+        start_time = time.time()
 
         for step in range(current_step, current_step + max_tokens):
             tgt_ids_Bx1xC = generated_BxTxC[:, step, :].unsqueeze(1)
@@ -429,6 +429,12 @@ class Dia:
                     break
 
             generation_step_index = step - current_step + 1
+
+            if step % 100 == 0:
+                print(
+                    f"Step {step} took {time.time() - start_time} seconds, speed: {100 / (time.time() - start_time)} tokens/s"
+                )
+                start_time = time.time()
 
         output_codes = generated_BxTxC[:, prompt_len_inc_bos : step + 1, :]
 

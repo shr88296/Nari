@@ -77,20 +77,6 @@ class DenseGeneral(nn.Module):
         return output
 
 
-def get_activation_fn(activation_string: str) -> nn.Module:  # Return Module instance
-    """Maps activation string to PyTorch activation function module."""
-    if activation_string == "gelu":
-        return nn.GELU()
-    elif activation_string == "relu":
-        return nn.ReLU()
-    elif activation_string == "silu" or activation_string == "swish":
-        return nn.SiLU()
-    elif activation_string == "linear":
-        return nn.Identity()
-    else:
-        raise ValueError(f"Unsupported activation function: {activation_string}")
-
-
 class MlpBlock(nn.Module):
     """MLP block using DenseGeneral."""
 
@@ -99,13 +85,10 @@ class MlpBlock(nn.Module):
         config: DiaConfig,
         embed_dim: int,
         intermediate_dim: int,
-        dropout_rate: float,
-        activations: list[str] = ["silu", "linear"],
         use_pre_norm: bool = False,
     ):
         super().__init__()
         self.use_pre_norm = use_pre_norm
-        num_activations = len(activations)
         compute_dtype = _str_to_dtype(config.training.dtype)
         weight_dtype = _str_to_dtype(config.model.weight_dtype)
         self.dtype = compute_dtype
@@ -120,21 +103,12 @@ class MlpBlock(nn.Module):
 
         self.wi_fused = DenseGeneral(
             in_shapes=(embed_dim,),
-            out_features=(
-                num_activations,
-                intermediate_dim,
-            ),
+            out_features=(2, intermediate_dim),
             axis=(-1,),
             dtype=compute_dtype,
             weight_dtype=weight_dtype,
         )
 
-        self.activation_fn_0 = get_activation_fn(activations[0])  # silu
-        self.activation_fn_1 = get_activation_fn(activations[1])  # linear
-
-        self.dropout = nn.Dropout(dropout_rate)
-
-        # Output layer using DenseGeneral
         self.wo = DenseGeneral(
             in_shapes=(intermediate_dim,),
             out_features=(embed_dim,),
@@ -143,22 +117,17 @@ class MlpBlock(nn.Module):
             weight_dtype=weight_dtype,
         )
 
-    def forward(self, x: torch.Tensor, deterministic: bool) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
         if self.use_pre_norm and hasattr(self, "pre_norm"):
             x = self.pre_norm(x)
 
         fused_x = self.wi_fused(x)
 
-        gate_input = fused_x[..., 0, :]
-        up_input = fused_x[..., 1, :]
+        gate = fused_x[..., 0, :]
+        up = fused_x[..., 1, :]
 
-        gate = self.activation_fn_0(gate_input)
-        up = self.activation_fn_1(up_input)
-        hidden = torch.mul(gate, up).to(self.dtype)
-
-        if not deterministic:
-            hidden = self.dropout(hidden)
+        hidden = torch.mul(F.silu(gate), up).to(self.dtype)
 
         output = self.wo(hidden)
         return output
@@ -249,7 +218,6 @@ class Attention(nn.Module):
         num_query_heads: int,
         num_kv_heads: int,
         head_dim: int,
-        dropout_rate: float,
         is_cross_attn: bool = False,
         out_embed_dim: int | None = None,
     ):
@@ -258,7 +226,6 @@ class Attention(nn.Module):
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
         self.is_cross_attn = is_cross_attn
-        self.dropout_rate = dropout_rate
         compute_dtype = _str_to_dtype(config.training.dtype)
         weight_dtype = _str_to_dtype(config.model.weight_dtype)
         self.output_dim = out_embed_dim if out_embed_dim is not None else q_embed_dim
@@ -311,7 +278,6 @@ class Attention(nn.Module):
         Xkv: torch.Tensor,  # (B, S, E) S = 1 in AR generation
         q_positions: torch.Tensor,  # (B, T)
         kv_positions: torch.Tensor | None = None,  # (B, S)
-        deterministic: bool = True,
         attn_mask: torch.Tensor | None = None,  # None in Decoder Self Attention, Valid mask in Others
         cache: KVCache | None = None,  # None in Encoder, KVCache in Decoder
         prefill: bool = False,  # True only when prefilling KV Cache
@@ -324,7 +290,6 @@ class Attention(nn.Module):
             Xkv: Key/Value source tensor (B, S, E). S=1 during single-step decoding for self-attn.
             q_positions: Positions for queries (B, T).
             kv_positions: Positions for keys/values (B, S). If None, uses q_positions.
-            deterministic: If True, disable dropout.
             attn_mask: Attention mask.
             cache: KVCache.
             prefill: If True, use prefill mode.
@@ -367,12 +332,8 @@ class Attention(nn.Module):
             Xv_BxKxSxH = Xv_BxSxKxH.transpose(1, 2)  # (B, K, S, H)
             # S=1 for Decode Step
 
-            if self.num_gqa_groups > 1:
-                Xk_BxNxSxH = Xk_BxKxSxH.repeat_interleave(self.num_gqa_groups, dim=1)
-                Xv_BxNxSxH = Xv_BxKxSxH.repeat_interleave(self.num_gqa_groups, dim=1)
-            else:
-                Xk_BxNxSxH = Xk_BxKxSxH
-                Xv_BxNxSxH = Xv_BxKxSxH
+            Xk_BxNxSxH = Xk_BxKxSxH
+            Xv_BxNxSxH = Xv_BxKxSxH
 
             # Encoder Self Attention
             if cache is None:
@@ -394,8 +355,8 @@ class Attention(nn.Module):
             attn_k,
             attn_v,
             attn_mask=attn_mask,
-            dropout_p=self.dropout_rate if not deterministic else 0.0,
             scale=1.0,
+            enable_gqa=self.num_gqa_groups > 1,
         )
 
         attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, N, H)
@@ -426,7 +387,6 @@ class EncoderLayer(nn.Module):
             num_query_heads=enc_config.n_head,
             num_kv_heads=enc_config.n_head,
             head_dim=enc_config.head_dim,
-            dropout_rate=model_config.dropout,
             is_cross_attn=False,
             out_embed_dim=embed_dim,
         )
@@ -439,17 +399,13 @@ class EncoderLayer(nn.Module):
             config=config,
             embed_dim=embed_dim,
             intermediate_dim=enc_config.n_hidden,
-            activations=enc_config.mlp_activations,
-            dropout_rate=model_config.dropout,
             use_pre_norm=enc_config.use_pre_norm,
         )
-        self.dropout = nn.Dropout(model_config.dropout)
 
     def forward(
         self,
         x: torch.Tensor,
         src_positions: torch.Tensor | None = None,
-        deterministic: bool = True,
         attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         residual = x
@@ -460,18 +416,15 @@ class EncoderLayer(nn.Module):
             Xkv=x_norm,
             q_positions=src_positions,
             kv_positions=src_positions,
-            deterministic=deterministic,
             attn_mask=attn_mask,
         )
         x = residual + sa_out
 
         residual = x
         x_norm = self.post_sa_norm(x)
-        mlp_out = self.mlp(x_norm, deterministic=deterministic)
+        mlp_out = self.mlp(x_norm)
         x = residual + mlp_out
 
-        if not deterministic:
-            x = self.dropout(x)
         return x
 
 
@@ -502,24 +455,13 @@ class Encoder(nn.Module):
         self,
         x_ids: torch.Tensor,
         src_positions: torch.Tensor | None = None,
-        deterministic: bool = True,
         attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x = self.embedding(x_ids)
 
-        if not deterministic:
-            x = self.dropout(x)
-
         for layer in self.layers:
-            x = layer(
-                x,
-                src_positions=src_positions,
-                deterministic=deterministic,
-                attn_mask=attn_mask,
-            )
+            x = layer(x, src_positions=src_positions, attn_mask=attn_mask)
         x = self.norm(x)
-        if not deterministic:
-            x = self.dropout(x)
         return x
 
 
@@ -560,7 +502,6 @@ class DecoderLayer(nn.Module):
             num_query_heads=dec_config.gqa_query_heads,
             num_kv_heads=dec_config.kv_heads,
             head_dim=dec_config.gqa_head_dim,
-            dropout_rate=model_config.dropout,
             is_cross_attn=False,
             out_embed_dim=dec_embed_dim,
         )
@@ -572,7 +513,6 @@ class DecoderLayer(nn.Module):
             num_query_heads=dec_config.cross_query_heads,
             num_kv_heads=dec_config.cross_query_heads,
             head_dim=dec_config.cross_head_dim,
-            dropout_rate=model_config.dropout,
             is_cross_attn=True,
             out_embed_dim=dec_embed_dim,
         )
@@ -581,8 +521,6 @@ class DecoderLayer(nn.Module):
             config=config,
             embed_dim=dec_embed_dim,
             intermediate_dim=dec_config.n_hidden,
-            activations=dec_config.mlp_activations,
-            dropout_rate=model_config.dropout,
             use_pre_norm=dec_config.use_pre_norm,
         )
 
@@ -592,7 +530,6 @@ class DecoderLayer(nn.Module):
         encoder_out: torch.Tensor,
         tgt_positions: torch.Tensor,
         src_positions: torch.Tensor | None,
-        deterministic: bool,
         self_attn_mask: torch.Tensor,
         cross_attn_mask: torch.Tensor,
         self_attn_cache: KVCache,
@@ -607,7 +544,6 @@ class DecoderLayer(nn.Module):
             Xkv=x_norm,  # (2, 1, D)
             q_positions=tgt_positions,  # (2, 1)
             kv_positions=tgt_positions,  # (2, 1)
-            deterministic=deterministic,
             attn_mask=self_attn_mask,  # (2, 1, 1, S_max)
             cache=self_attn_cache,
             prefill=prefill,
@@ -623,7 +559,6 @@ class DecoderLayer(nn.Module):
             Xkv=encoder_out,
             q_positions=tgt_positions,
             kv_positions=src_positions,
-            deterministic=deterministic,
             attn_mask=cross_attn_mask,
             cache=cross_attn_cache,
         )
@@ -632,7 +567,7 @@ class DecoderLayer(nn.Module):
         # 3. MLP
         residual = x
         x_norm = self.pre_mlp_norm(x)
-        mlp_out = self.mlp(x_norm, deterministic=deterministic)
+        mlp_out = self.mlp(x_norm)
         x = residual + mlp_out
 
         return x, new_kv_cache
@@ -745,7 +680,6 @@ class Decoder(nn.Module):
                 encoder_out,  # (2, S, E)
                 src_positions=None,  # CA KV is already computed
                 tgt_positions=tgt_pos_Bx1,  # (2, 1)
-                deterministic=True,
                 self_attn_mask=None,
                 cross_attn_mask=cross_attn_mask,
                 self_attn_cache=self_cache,
@@ -764,7 +698,6 @@ class Decoder(nn.Module):
         encoder_out: torch.Tensor,
         tgt_positions: torch.Tensor,
         src_positions: torch.Tensor,
-        deterministic: bool,
         self_attn_mask: torch.Tensor,
         cross_attn_mask: torch.Tensor,
         self_attention_cache: list[KVCache],
@@ -778,7 +711,6 @@ class Decoder(nn.Module):
             encoder_out: Output from the encoder (B, S, E).
             tgt_positions: Positions for target sequence (B, T).
             src_positions: Positions for source sequence (B, S).
-            deterministic: Disable dropout if True.
             self_attn_mask: Mask for self-attention.
             cross_attn_mask: Mask for cross-attention.
             past_key_values: List containing the self-attention KV cache for each layer
@@ -804,16 +736,12 @@ class Decoder(nn.Module):
             channel_embed = self.embeddings[i](channel_tokens)
             x = channel_embed if x is None else x + channel_embed
 
-        if not deterministic:
-            x = self.dropout(x)
-
         for i, layer in enumerate(self.layers):
             x, _ = layer(
                 x,
                 encoder_out,
                 tgt_positions=tgt_positions,
                 src_positions=src_positions,
-                deterministic=deterministic,
                 self_attn_mask=self_attn_mask,
                 cross_attn_mask=cross_attn_mask,
                 self_attn_cache=self_attention_cache[i],
@@ -846,15 +774,11 @@ class DiaModel(nn.Module):
         enc_self_attn_mask: torch.Tensor | None = None,
         dec_self_attn_mask: torch.Tensor | None = None,
         dec_cross_attn_mask: torch.Tensor | None = None,
-        enable_dropout: bool = True,
     ):
-        deterministic = not enable_dropout
-
         # --- Encoder Pass ---
         encoder_out = self.encoder(
             x_ids=src_BxS,
             src_positions=src_positions,
-            deterministic=deterministic,
             attn_mask=enc_self_attn_mask,
         )
 
@@ -864,7 +788,6 @@ class DiaModel(nn.Module):
             encoder_out=encoder_out,
             tgt_positions=tgt_positions,
             src_positions=src_positions,
-            deterministic=deterministic,
             self_attn_mask=dec_self_attn_mask,
             cross_attn_mask=dec_cross_attn_mask,
             precomputed_cross_attn_kv=None,
