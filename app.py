@@ -387,4 +387,4 @@ with gr.Blocks(css=css) as demo:
 # --- Launch the App ---
 if __name__ == "__main__":
     print("Launching Gradio interface...")
-    demo.launch(share=args.share)
+    demo.launch(server_name="0.0.0.0", share=args.share)
