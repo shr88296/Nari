@@ -76,12 +76,15 @@ class Dia:
     @classmethod
     def from_local(cls, config_path: str, checkpoint_path: str, device: torch.device | None = None) -> "Dia":
         """Loads the Dia model from local configuration and checkpoint files.
+
         Args:
             config_path: Path to the configuration JSON file.
             checkpoint_path: Path to the model checkpoint (.pth) file.
             device: The device to load the model onto. If None, will automatically select the best available device.
+
         Returns:
             An instance of the Dia model loaded with weights and set to eval mode.
+
         Raises:
             FileNotFoundError: If the config or checkpoint file is not found.
             RuntimeError: If there is an error loading the checkpoint.
@@ -110,13 +113,17 @@ class Dia:
         cls, model_name: str = "nari-labs/Dia-1.6B", device: torch.device | None = None
     ) -> "Dia":
         """Loads the Dia model from a Hugging Face Hub repository.
+
         Downloads the configuration and checkpoint files from the specified
         repository ID and then loads the model.
+
         Args:
             model_name: The Hugging Face Hub repository ID (e.g., "NariLabs/Dia-1.6B").
             device: The device to load the model onto. If None, will automatically select the best available device.
+
         Returns:
             An instance of the Dia model loaded with weights and set to eval mode.
+
         Raises:
             FileNotFoundError: If config or checkpoint download/loading fails.
             RuntimeError: If there is an error loading the checkpoint.
@@ -124,7 +131,7 @@ class Dia:
         config_path = hf_hub_download(repo_id=model_name, filename="config.json")
         checkpoint_path = hf_hub_download(repo_id=model_name, filename="dia-v0_1.pth")
         return cls.from_local(config_path, checkpoint_path, device)
-    
+
     def _load_dac_model(self):
         try:
             dac_model_path = dac.utils.download()
