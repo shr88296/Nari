@@ -3,8 +3,9 @@ import numpy as np
 import torch
 import torchaudio
 from huggingface_hub import hf_hub_download
+from typing import Generator, List, Tuple, Optional, Union
 
-from .audio import audio_to_codebook, codebook_to_audio
+from .audio import audio_to_codebook, codebook_to_audio, build_revert_indices, revert_audio_delay, decode
 from .config import DiaConfig
 from .layers import DiaModel, KVCache
 
@@ -208,6 +209,60 @@ class Dia:
 
         return src_tokens, src_positions, src_padding_mask, enc_self_attn_mask
 
+    def _stream_tokens_to_audio(
+        self, 
+        tokens: torch.Tensor, 
+        delay_pattern: List[int]
+    ) -> np.ndarray:
+        """
+        Process a chunk of tokens to generate streaming audio.
+        
+        Args:
+            tokens: Tensor of shape [1, T, C] containing audio tokens
+            delay_pattern: List of delays for each channel
+            
+        Returns:
+            numpy array of audio samples
+        """
+        num_channels = tokens.shape[2]
+        seq_length = tokens.shape[1]
+        
+        # Build revert indices for the delay pattern
+        t_idx_BxTxC, indices_BTCx3 = build_revert_indices(
+            B=1, 
+            T=seq_length, 
+            C=num_channels, 
+            delay_pattern=delay_pattern
+        )
+        
+        # Apply the revert operation to get the original tokens
+        reverted_tokens = revert_audio_delay(
+            audio_BxTxC=tokens,
+            pad_value=0,
+            precomp=(t_idx_BxTxC, indices_BTCx3),
+            T=seq_length,
+        )
+        
+        # Transpose to [1, C, T] for the DAC model
+        codebook = reverted_tokens.transpose(1, 2)
+        
+        # Validate token range and clamp if needed
+        min_valid_index = 0
+        max_valid_index = 1023
+        invalid_mask = (codebook < min_valid_index) | (codebook > max_valid_index)
+        
+        num_invalid = torch.sum(invalid_mask).item()
+        if num_invalid > 0:
+            print(f"Warning: Clamping {num_invalid} indices outside range [{min_valid_index}, {max_valid_index}] to 0.")
+        
+        # Set invalid values to 0
+        codebook[invalid_mask] = 0
+        
+        # Decode the audio tokens to waveform
+        audio_array = decode(self.dac_model, codebook)
+        
+        return audio_array.squeeze().cpu().numpy()
+    
     @torch.inference_mode()
     def generate(
         self,
@@ -438,3 +493,285 @@ class Dia:
             generated_codes.transpose(1, 0), self.dac_model, delay_pattern, B=1, T=max_tokens, C=num_channels
         )
         return audio.squeeze().cpu().numpy()
+        
+    @torch.inference_mode()
+    def generate_streaming(
+        self,
+        text: str,
+        max_tokens: int | None = None,
+        cfg_scale: float = 3.0,
+        temperature: float = 1.3,
+        top_p: float = 0.95,
+        use_cfg_filter: bool = True,
+        use_torch_compile: bool = False,
+        cfg_filter_top_k: int = 35,
+        audio_prompt_path: str | None = None,
+        chunk_size: int = 100,  # Number of tokens to generate before yielding audio
+        overlap: int = 10,      # Overlap between chunks to prevent boundary artifacts
+    ) -> Generator[np.ndarray, None, None]:
+        """
+        Generates audio from a text prompt in a streaming fashion, yielding chunks of audio as they're generated.
+        
+        Args:
+            text: The text prompt to generate audio from.
+            max_tokens: Maximum number of tokens to generate.
+            cfg_scale: Classifier-free guidance scale.
+            temperature: Sampling temperature.
+            top_p: Top-p sampling parameter.
+            use_cfg_filter: Whether to use classifier-free guidance filtering.
+            use_torch_compile: Whether to use torch.compile for the decode step.
+            cfg_filter_top_k: Number of top-k tokens to consider for CFG filtering.
+            audio_prompt_path: Optional path to an audio prompt.
+            chunk_size: Number of tokens to generate before yielding audio.
+            overlap: Overlap between chunks to prevent boundary artifacts.
+            
+        Yields:
+            Chunks of generated audio as numpy arrays.
+        """
+        num_channels = self.config.data.channels
+        audio_bos_value = self.config.data.audio_bos_value
+        audio_eos_value = self.config.data.audio_eos_value
+        audio_pad_value = self.config.data.audio_pad_value
+        delay_pattern = self.config.data.delay_pattern
+        max_tokens = self.config.data.audio_length if max_tokens is None else max_tokens
+        delay_tensor = torch.tensor(delay_pattern, dtype=torch.long, device=self.device)
+        max_delay_pattern = max(delay_pattern)
+        self.model.eval()
+        
+        # Minimum number of tokens needed before we can start producing audio
+        # Accounts for the delay pattern to ensure we have enough context
+        min_tokens_before_streaming = max_delay_pattern + 1
+        
+        # Setup for text input encoding
+        (
+            cond_src_BxS,
+            cond_src_positions_BxS,
+            cond_src_padding_mask_BxS,
+            cond_enc_self_attn_mask_Bx1xSxS,
+        ) = self._prepare_text_input(text)
+
+        unc_src_BxS = torch.zeros_like(cond_src_BxS)
+        src_BxS = torch.cat([unc_src_BxS, cond_src_BxS], dim=0)
+        src_positions_BxS = cond_src_positions_BxS.expand(2, -1)
+        src_padding_mask_BxS = cond_src_padding_mask_BxS.expand(2, -1)
+        enc_self_attn_mask_Bx1xSxS = cond_enc_self_attn_mask_Bx1xSxS.expand(2, -1, -1, -1)
+
+        # Encoder Pass
+        encoder_out = self.model.encoder(
+            x_ids=src_BxS,
+            src_positions=src_positions_BxS,
+            deterministic=True,
+            attn_mask=enc_self_attn_mask_Bx1xSxS,
+        )  # Shape: (B, S, E)
+
+        # Prepare Decoder Inputs
+        # Allocate KV Cache
+        decoder_cross_attention_cache: list[KVCache] = self.model.decoder.precompute_cross_attention_kv(
+            max_tokens, encoder_out, src_positions_BxS
+        )
+
+        decoder_self_attention_cache: list[KVCache] = []
+        for _ in range(self.model.decoder.num_layers):
+            decoder_self_attention_cache.append(
+                KVCache(
+                    self.config.model.decoder.gqa_query_heads,
+                    max_tokens,
+                    self.config.model.decoder.gqa_head_dim,
+                    self.device,
+                )
+            )
+
+        # Initialize decoder inputs with BOS token
+        generated_BxTxC = torch.full(
+            (2, 1, num_channels),
+            fill_value=audio_bos_value,
+            dtype=torch.long,
+            device=self.device,
+        )
+
+        current_step = 0
+        prompt_len_inc_bos = 1  # Start with BOS length
+        
+        # Handle audio prompt if provided
+        if audio_prompt_path is not None:
+            audio_prompt, sr = torchaudio.load(audio_prompt_path, channels_first=True)  # C, T
+            if sr != 44100:  # Resample to 44.1kHz
+                audio_prompt = torchaudio.functional.resample(audio_prompt, sr, 44100)
+            audio_prompt = audio_prompt.to(self.device).unsqueeze(0)  # 1, C, T
+            audio_prompt = audio_to_codebook(self.dac_model, audio_prompt, data_config=self.config.data)
+            generated_BxTxC = torch.cat([generated_BxTxC, audio_prompt.expand(2, -1, -1)], dim=1)
+
+            prefill_len = generated_BxTxC.shape[1]
+            prompt_len_inc_bos = prefill_len
+            prefill_tgt_pos = torch.arange(prefill_len, device=self.device).unsqueeze(0).expand(2, -1)
+            prefill_tgt_padding_mask = (generated_BxTxC != audio_pad_value).any(dim=2)
+
+            prefill_self_attn_mask = self._create_attn_mask(
+                prefill_tgt_padding_mask,
+                prefill_tgt_padding_mask,
+                is_causal=True,
+            )
+            prefill_cross_attn_mask = self._create_attn_mask(
+                prefill_tgt_padding_mask,
+                src_padding_mask_BxS,
+                is_causal=False,
+            )
+
+            _ = self.model.decoder.forward(
+                tgt_ids_BxTxC=generated_BxTxC,
+                encoder_out=encoder_out,
+                tgt_positions=prefill_tgt_pos,
+                src_positions=src_positions_BxS,
+                deterministic=True,
+                self_attn_mask=prefill_self_attn_mask,
+                cross_attn_mask=prefill_cross_attn_mask,
+                self_attention_cache=decoder_self_attention_cache,
+                cross_attention_cache=decoder_cross_attention_cache,
+            )
+
+            current_step = prefill_len - 1
+        
+        # Setup for autoregressive generation
+        decode_step = self.model.decoder.decode_step
+        if use_torch_compile:
+            decode_step = torch.compile(
+                self.model.decoder.decode_step,
+                mode="default",
+            )
+
+        tgt_padding_mask = (
+            (generated_BxTxC[:, -1, :].unsqueeze(1) != audio_pad_value).any(dim=2).to(self.device)
+        )  # [B, 1]
+        # Generated tokens are never PAD, so we use fixed mask
+        decoder_cross_attn_mask = self._create_attn_mask(
+            tgt_padding_mask,  # Query mask [B, 1]
+            src_padding_mask_BxS,  # Key mask [B, S]
+            is_causal=False,
+        )  # [B, 1, 1, S]
+        
+        # Storage for streaming
+        streaming_tokens = [] 
+        token_count = 0
+        chunk_count = 0
+        eos_detected_channel_0 = False
+        eos_countdown = -1
+        extra_steps_after_eos = 30
+        
+        # Autoregressive generation loop
+        for step in range(current_step, current_step + max_tokens):
+            # Handle current token position in generation
+            position_in_output = step - current_step + prompt_len_inc_bos
+            
+            # Make sure there's enough room in our generated tensor
+            if step + 1 >= generated_BxTxC.shape[1]:
+                # Extend the tensor if needed
+                generated_BxTxC = torch.cat(
+                    [
+                        generated_BxTxC,
+                        torch.full(
+                            (2, chunk_size, num_channels),
+                            fill_value=-1,
+                            dtype=torch.long,
+                            device=self.device,
+                        ),
+                    ],
+                    dim=1,
+                )
+            
+            # Get the current tokens as input to the decoder
+            tgt_ids_Bx1xC = generated_BxTxC[:, step, :].unsqueeze(1)
+            tgt_pos_Bx1 = torch.full(
+                (2, 1),
+                fill_value=step,
+                dtype=torch.long,
+                device=self.device,
+            )
+            
+            # Generate next token
+            logits_Bx1xCxV, new_cache = decode_step(
+                tgt_ids_Bx1xC=tgt_ids_Bx1xC,
+                tgt_pos_Bx1=tgt_pos_Bx1,
+                encoder_out=encoder_out,
+                self_attn_mask=None,
+                cross_attn_mask=decoder_cross_attn_mask,
+                self_attention_cache=decoder_self_attention_cache,
+                cross_attention_cache=decoder_cross_attention_cache,
+            )
+            
+            # Update KV cache
+            for i, layer_cache in enumerate(decoder_self_attention_cache):
+                layer_cache.update_cache(new_cache[i][0], new_cache[i][1])
+            
+            # Sample the next token using classifier-free guidance
+            V = self.config.model.tgt_vocab_size
+            logits_last_BxCxV = logits_Bx1xCxV[:, -1, :, :]  # B, C, V
+            uncond_logits_CxV = logits_last_BxCxV[0, :, :]
+            cond_logits_CxV = logits_last_BxCxV[1, :, :]
+            
+            cfg_logits_CxV = cond_logits_CxV + cfg_scale * (cond_logits_CxV - uncond_logits_CxV)
+            
+            logits_CxV = cfg_logits_CxV.reshape((-1, V))  # C, V
+            logits_CxV[:, 1025:] = -torch.inf
+            
+            # Sample next token
+            pred_C = _sample_next_token(
+                logits_CxV.float(),
+                temperature=temperature,
+                top_p=top_p,
+                use_cfg_filter=use_cfg_filter,
+                cfg_filter_top_k=cfg_filter_top_k,
+            )
+            
+            # Handle delay pattern for prompts
+            generation_step_index = step - current_step
+            if audio_prompt_path is None:
+                pred_C = torch.where(
+                    generation_step_index >= delay_tensor,
+                    pred_C,
+                    audio_bos_value,
+                )
+            
+            # Store the generated token
+            generated_BxTxC[:, step + 1, :] = pred_C.unsqueeze(0).expand(2, -1)
+            
+            # Add to streaming buffer
+            streaming_tokens.append(pred_C.clone())
+            token_count += 1
+            
+            # EOS handling
+            if not eos_detected_channel_0 and pred_C[0] == audio_eos_value:
+                eos_detected_channel_0 = True
+                eos_countdown = extra_steps_after_eos
+            
+            if eos_countdown > 0:
+                step_after_eos = max_delay_pattern - eos_countdown
+                for i, d in enumerate(delay_pattern):
+                    if step_after_eos == d:
+                        generated_BxTxC[:, step + 1, i] = audio_eos_value
+                    elif step_after_eos > d:
+                        generated_BxTxC[:, step + 1, i] = audio_pad_value
+                eos_countdown -= 1
+                if eos_countdown == 0:
+                    # Process any remaining tokens before exiting
+                    if streaming_tokens:
+                        chunk_tensor = torch.stack(streaming_tokens, dim=0).unsqueeze(0)  # [1, T, C]
+                        yield self._stream_tokens_to_audio(chunk_tensor, delay_pattern)
+                    break
+            
+            # Process a chunk once we have enough tokens
+            if token_count >= chunk_size and token_count >= min_tokens_before_streaming:
+                # If we have enough tokens, create a chunk
+                chunk_tensor = torch.stack(streaming_tokens[:chunk_size-overlap], dim=0).unsqueeze(0)  # [1, T, C]
+                
+                # Convert to audio and yield
+                yield self._stream_tokens_to_audio(chunk_tensor, delay_pattern)
+                
+                # Keep overlap tokens for next chunk
+                streaming_tokens = streaming_tokens[chunk_size-overlap:]
+                token_count = len(streaming_tokens)
+                chunk_count += 1
+        
+        # Process any remaining tokens
+        if streaming_tokens and not eos_detected_channel_0:
+            chunk_tensor = torch.stack(streaming_tokens, dim=0).unsqueeze(0)  # [1, T, C]
+            yield self._stream_tokens_to_audio(chunk_tensor, delay_pattern)
