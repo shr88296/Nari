@@ -1,5 +1,6 @@
 import dac
 import numpy as np
+import safetensors.torch
 import torch
 import torchaudio
 from huggingface_hub import hf_hub_download
@@ -96,7 +97,10 @@ class Dia:
         dia = cls(config, device)
 
         try:
-            state_dict = torch.load(checkpoint_path, map_location=dia.device)
+            if checkpoint_path.endswith(".safetensors"):
+                state_dict = safetensors.torch.load_file(checkpoint_path, device=str(dia.device))
+            else:
+                state_dict = torch.load(checkpoint_path, map_location=dia.device)
             dia.model.load_state_dict(state_dict)
         except FileNotFoundError:
             raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}")
@@ -110,7 +114,11 @@ class Dia:
 
     @classmethod
     def from_pretrained(
-        cls, model_name: str = "nari-labs/Dia-1.6B", device: torch.device | None = None
+        cls,
+        model_name: str = "nari-labs/Dia-1.6B",
+        config_path: str = "config.json",
+        checkpoint_path: str = "dia-v0_1.pth",
+        device: torch.device | None = None,
     ) -> "Dia":
         """Loads the Dia model from a Hugging Face Hub repository.
 
@@ -128,8 +136,8 @@ class Dia:
             FileNotFoundError: If config or checkpoint download/loading fails.
             RuntimeError: If there is an error loading the checkpoint.
         """
-        config_path = hf_hub_download(repo_id=model_name, filename="config.json")
-        checkpoint_path = hf_hub_download(repo_id=model_name, filename="dia-v0_1.pth")
+        config_path = hf_hub_download(repo_id=model_name, filename=config_path)
+        checkpoint_path = hf_hub_download(repo_id=model_name, filename=checkpoint_path)
         return cls.from_local(config_path, checkpoint_path, device)
 
     def _load_dac_model(self):
