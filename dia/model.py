@@ -6,7 +6,8 @@ from huggingface_hub import hf_hub_download
 
 from .audio import audio_to_codebook, codebook_to_audio
 from .config import DiaConfig
-from .layers import DiaModel, KVCache
+from .layers import DiaModel
+from .state import KVCache
 
 
 def get_default_device():
@@ -269,6 +270,7 @@ class Dia:
                     self.config.model.decoder.kv_heads,
                     max_tokens,
                     self.config.model.decoder.gqa_head_dim,
+                    torch.bfloat16,
                     self.device,
                 )
             )
@@ -371,7 +373,7 @@ class Dia:
                 device=self.device,
             )
 
-            logits_Bx1xCxV, new_cache = decode_step(
+            logits_Bx1xCxV = decode_step(
                 tgt_ids_Bx1xC=tgt_ids_Bx1xC,
                 tgt_pos_Bx1=tgt_pos_Bx1,
                 encoder_out=encoder_out,
@@ -380,9 +382,6 @@ class Dia:
                 self_attention_cache=decoder_self_attention_cache,
                 cross_attention_cache=decoder_cross_attention_cache,
             )
-
-            for i, layer_cache in enumerate(decoder_self_attention_cache):
-                layer_cache.update_cache(new_cache[i][0], new_cache[i][1])
 
             V = self.config.model.tgt_vocab_size
             logits_last_BxCxV = logits_Bx1xCxV[:, -1, :, :]  # B, C, V

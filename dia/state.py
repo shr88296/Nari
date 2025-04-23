@@ -70,9 +70,18 @@ class EncoderInferenceState:
 
 
 class KVCache:
-    def __init__(self, num_heads: int, max_len: int, head_dim: int, device: torch.device):
-        self.k = torch.zeros((2, num_heads, max_len, head_dim), device=device)
-        self.v = torch.zeros((2, num_heads, max_len, head_dim), device=device)
+    def __init__(
+        self,
+        num_heads: int,
+        max_len: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        k: torch.Tensor | None = None,
+        v: torch.Tensor | None = None,
+    ):
+        self.k = torch.zeros((2, num_heads, max_len, head_dim), dtype=dtype, device=device) if k is None else k
+        self.v = torch.zeros((2, num_heads, max_len, head_dim), dtype=dtype, device=device) if v is None else v
         self.current_idx = torch.tensor(0)
         self.max_len = max_len
 

@@ -7,6 +7,7 @@ from torch import Tensor
 from torch.nn import RMSNorm
 
 from .config import DiaConfig
+from .state import KVCache
 
 
 def _normalize_axes(axes: tuple[int, ...], ndim: int) -> tuple[int, ...]:
@@ -159,37 +160,6 @@ class RotaryEmbedding(nn.Module):
         return torch.cat((first_part, second_part), dim=-1)
 
 
-class KVCache:
-    def __init__(self, num_heads, max_len, head_dim, device, k=None, v=None):
-        self.k = torch.zeros((2, num_heads, max_len, head_dim), device=device) if k is None else k
-        self.v = torch.zeros((2, num_heads, max_len, head_dim), device=device) if v is None else v
-        self.current_idx = 0
-        self.max_len = max_len
-
-    def get_kv_for_attention(self, current_k, current_v):
-        if self.current_idx == 0:
-            return current_k, current_v
-        else:
-            past_k = self.k[:, :, : self.current_idx, :]
-            past_v = self.v[:, :, : self.current_idx, :]
-            attn_k = torch.cat((past_k, current_k), dim=2)
-            attn_v = torch.cat((past_v, current_v), dim=2)
-            return attn_k, attn_v
-
-    def update_cache(self, k, v):
-        assert self.current_idx < self.max_len
-        self.k[:, :, self.current_idx : self.current_idx + 1, :] = k
-        self.v[:, :, self.current_idx : self.current_idx + 1, :] = v
-        self.current_idx += 1
-
-    def prefill_kv(self, k, v):
-        prefill_len = k.shape[2]
-        assert prefill_len <= self.max_len
-        self.k[:, :, :prefill_len, :] = k
-        self.v[:, :, :prefill_len, :] = v
-        self.current_idx = prefill_len
-
-
 class Attention(nn.Module):
     """Attention using DenseGeneral."""
 
@@ -286,14 +256,10 @@ class Attention(nn.Module):
         Xq_BxTxNxH = self.rotary_emb(Xq_BxTxNxH, position=q_positions)
         Xq_BxNxTxH = Xq_BxTxNxH.transpose(1, 2)
 
-        # Input values into attention calculation
         attn_k: torch.Tensor | None = None
         attn_v: torch.Tensor | None = None
-        new_kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None
 
-        # Decoder Cross Attention
         if self.is_cross_attn:
-            # Directly use cache (no need to check index)
             attn_k, attn_v = cache.k, cache.v
             if attn_k.shape[1] != self.num_query_heads or attn_v.shape[1] != self.num_query_heads:
                 raise ValueError(
@@ -301,7 +267,6 @@ class Attention(nn.Module):
                     f"does not match num_query_heads ({self.num_query_heads}). "
                     "Cache should be pre-repeated for GQA."
                 )
-        # Self Attention
         else:
             Xk_BxSxKxH = self.k_proj(Xkv)  # (B, S, K, H)
             Xv_BxSxKxH = self.v_proj(Xkv)  # (B, S, K, H)
@@ -314,25 +279,15 @@ class Attention(nn.Module):
             Xk_BxNxSxH = Xk_BxKxSxH
             Xv_BxNxSxH = Xv_BxKxSxH
 
-            # Encoder Self Attention
             if cache is None:
                 attn_k = Xk_BxNxSxH
                 attn_v = Xv_BxNxSxH
-            # Decoder Self Attention
             else:
-                # In prefill mode, we fill in cache until prefill length
                 if prefill:
                     attn_k, attn_v = Xk_BxNxSxH, Xv_BxNxSxH
-                    cache.prefill_kv(attn_k, attn_v)
-                # In decode step, we add current K/V to cache step by step
+                    cache.prefill(attn_k, attn_v)
                 else:
-                    new_kv_cache = Xk_BxNxSxH, Xv_BxNxSxH
-                    attn_k, attn_v = cache.get_kv_for_attention(Xk_BxNxSxH, Xv_BxNxSxH)
-
-        query_dtype = Xq_BxNxTxH.dtype
-        if attn_k.dtype != query_dtype or attn_v.dtype != query_dtype:
-            attn_k = attn_k.to(query_dtype)
-            attn_v = attn_v.to(query_dtype)
+                    attn_k, attn_v = cache.update_one(Xk_BxNxSxH, Xv_BxNxSxH)
 
         attn_output = F.scaled_dot_product_attention(
             Xq_BxNxTxH,
@@ -346,7 +301,7 @@ class Attention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, N, H)
         output = self.o_proj(attn_output)
 
-        return output.to(original_dtype), new_kv_cache
+        return output.to(original_dtype)
 
 
 class EncoderLayer(nn.Module):
@@ -394,7 +349,7 @@ class EncoderLayer(nn.Module):
         residual = x
         x_norm = self.pre_sa_norm(x)
 
-        sa_out, _ = self.self_attention(
+        sa_out = self.self_attention(
             Xq=x_norm,
             Xkv=x_norm,
             q_positions=src_positions,
@@ -521,7 +476,7 @@ class DecoderLayer(nn.Module):
         residual = x
         x_norm = self.pre_sa_norm(x)
 
-        sa_out, new_kv_cache = self.self_attention(
+        sa_out = self.self_attention(
             Xq=x_norm,  # (2, 1, D)
             Xkv=x_norm,  # (2, 1, D)
             q_positions=tgt_positions,  # (2, 1)
@@ -533,10 +488,9 @@ class DecoderLayer(nn.Module):
 
         x = residual + sa_out
 
-        # 2. Cross-Attention
         residual = x
         x_norm = self.pre_ca_norm(x)
-        ca_out, _ = self.cross_attention(
+        ca_out = self.cross_attention(
             Xq=x_norm,
             Xkv=encoder_out,
             q_positions=tgt_positions,
@@ -546,13 +500,12 @@ class DecoderLayer(nn.Module):
         )
         x = residual + ca_out
 
-        # 3. MLP
         residual = x
         x_norm = self.pre_mlp_norm(x)
         mlp_out = self.mlp(x_norm)
         x = residual + mlp_out
 
-        return x, new_kv_cache
+        return x
 
 
 class Decoder(nn.Module):
@@ -563,7 +516,6 @@ class Decoder(nn.Module):
         self.config = config
         model_config = config.model
         dec_config = config.model.decoder
-        train_config = config.training
         data_config = config.data
         compute_dtype = _str_to_dtype(config.training.dtype)
         weight_dtype = _str_to_dtype(config.model.weight_dtype)
@@ -584,7 +536,6 @@ class Decoder(nn.Module):
             dtype=torch.float32,
         )
 
-        # Final Logits Projection using DenseGeneral
         self.logits_dense = DenseGeneral(
             in_shapes=(dec_config.n_embd,),
             out_features=(self.num_channels, model_config.tgt_vocab_size),
@@ -617,6 +568,7 @@ class Decoder(nn.Module):
                     cross_attn_module.num_kv_heads,
                     max_len,
                     cross_attn_module.head_dim,
+                    torch.bfloat16,
                     k.device,
                     k=k,
                     v=v,
@@ -650,12 +602,10 @@ class Decoder(nn.Module):
             channel_embed = self.embeddings[i](channel_tokens)
             x = channel_embed if x is None else x + channel_embed
 
-        new_cache = []
-
         for i, layer in enumerate(self.layers):
             self_cache = self_attention_cache[i]
             cross_cache = cross_attention_cache[i]
-            x, new_kv_cache = layer(
+            x = layer(
                 x,  # (2, 1, D)
                 encoder_out,  # (2, S, E)
                 src_positions=None,  # CA KV is already computed
@@ -665,12 +615,11 @@ class Decoder(nn.Module):
                 self_attn_cache=self_cache,
                 cross_attn_cache=cross_cache,
             )
-            new_cache.append(new_kv_cache)
 
         x = self.norm(x)
         logits_Bx1xCxV = self.logits_dense(x)
 
-        return logits_Bx1xCxV.to(torch.float32), new_cache
+        return logits_Bx1xCxV.to(torch.float32)
 
     def forward(
         self,
@@ -717,7 +666,7 @@ class Decoder(nn.Module):
             x = channel_embed if x is None else x + channel_embed
 
         for i, layer in enumerate(self.layers):
-            x, _ = layer(
+            x = layer(
                 x,
                 encoder_out,
                 tgt_positions=tgt_positions,
@@ -763,7 +712,7 @@ class DiaModel(nn.Module):
         )
 
         # --- Decoder Pass ---
-        logits, _ = self.decoder(
+        logits = self.decoder(
             tgt_ids_BxTxC=tgt_BxTxC,
             encoder_out=encoder_out,
             tgt_positions=tgt_positions,
