@@ -73,65 +73,6 @@ class Dia:
         self.model = DiaModel(config)
         self.dac_model = None
 
-    @classmethod
-    def from_local(cls, config_path: str, checkpoint_path: str, device: torch.device | None = None) -> "Dia":
-        """Loads the Dia model from local configuration and checkpoint files.
-
-        Args:
-            config_path: Path to the configuration JSON file.
-            checkpoint_path: Path to the model checkpoint (.pth) file.
-            device: The device to load the model onto. If None, will automatically select the best available device.
-
-        Returns:
-            An instance of the Dia model loaded with weights and set to eval mode.
-
-        Raises:
-            FileNotFoundError: If the config or checkpoint file is not found.
-            RuntimeError: If there is an error loading the checkpoint.
-        """
-        config = DiaConfig.load(config_path)
-        if config is None:
-            raise FileNotFoundError(f"Config file not found at {config_path}")
-
-        dia = cls(config, device)
-
-        try:
-            state_dict = torch.load(checkpoint_path, map_location=dia.device)
-            dia.model.load_state_dict(state_dict)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}")
-        except Exception as e:
-            raise RuntimeError(f"Error loading checkpoint from {checkpoint_path}") from e
-
-        dia.model.to(dia.device)
-        dia.model.eval()
-        dia._load_dac_model()
-        return dia
-
-    @classmethod
-    def from_pretrained(
-        cls, model_name: str = "nari-labs/Dia-1.6B", device: torch.device | None = None
-    ) -> "Dia":
-        """Loads the Dia model from a Hugging Face Hub repository.
-
-        Downloads the configuration and checkpoint files from the specified
-        repository ID and then loads the model.
-
-        Args:
-            model_name: The Hugging Face Hub repository ID (e.g., "NariLabs/Dia-1.6B").
-            device: The device to load the model onto. If None, will automatically select the best available device.
-
-        Returns:
-            An instance of the Dia model loaded with weights and set to eval mode.
-
-        Raises:
-            FileNotFoundError: If config or checkpoint download/loading fails.
-            RuntimeError: If there is an error loading the checkpoint.
-        """
-        config_path = hf_hub_download(repo_id=model_name, filename="config.json")
-        checkpoint_path = hf_hub_download(repo_id=model_name, filename="dia-v0_1.pth")
-        return cls.from_local(config_path, checkpoint_path, device)
-
     def _load_dac_model(self):
         try:
             dac_model_path = dac.utils.download()
