@@ -29,6 +29,9 @@ build-backend = "hatchling.build"
 "Homepage" = "https://github.com/nari-labs/dia"
 "Bug Tracker" = "https://github.com/nari-labs/dia/issues"
 
+[project.scripts]
+dia = "dia.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["dia"]
 
