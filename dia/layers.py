@@ -50,7 +50,6 @@ class DenseGeneral(nn.Module):
         in_shapes: tuple[int, ...],
         out_features: tuple[int, ...],
         axis: tuple[int, ...] = (-1,),
-        dtype: torch.dtype | None = None,
         weight_dtype: torch.dtype | None = None,
         device: torch.device | None = None,
     ):
@@ -58,7 +57,6 @@ class DenseGeneral(nn.Module):
         self.in_shapes = in_shapes
         self.out_features = out_features
         self.axis = axis
-        self.dtype = dtype
         self.kernel_shape = self.in_shapes + self.out_features
 
         factory_kwargs = {"device": device, "dtype": weight_dtype}
@@ -85,27 +83,16 @@ class MlpBlock(nn.Module):
         config: DiaConfig,
         embed_dim: int,
         intermediate_dim: int,
-        use_pre_norm: bool = False,
     ):
         super().__init__()
-        self.use_pre_norm = use_pre_norm
         compute_dtype = _str_to_dtype(config.training.dtype)
         weight_dtype = _str_to_dtype(config.model.weight_dtype)
         self.dtype = compute_dtype
-        # Assume default device for now, could be passed in config
-
-        if use_pre_norm:
-            self.pre_norm = RMSNorm(
-                embed_dim,
-                eps=config.model.normalization_layer_epsilon,
-                dtype=torch.float32,
-            )
 
         self.wi_fused = DenseGeneral(
             in_shapes=(embed_dim,),
             out_features=(2, intermediate_dim),
             axis=(-1,),
-            dtype=compute_dtype,
             weight_dtype=weight_dtype,
         )
 
@@ -113,15 +100,11 @@ class MlpBlock(nn.Module):
             in_shapes=(intermediate_dim,),
             out_features=(embed_dim,),
             axis=(-1,),
-            dtype=compute_dtype,
             weight_dtype=weight_dtype,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
-        if self.use_pre_norm and hasattr(self, "pre_norm"):
-            x = self.pre_norm(x)
-
         fused_x = self.wi_fused(x)
 
         gate = fused_x[..., 0, :]
@@ -239,28 +222,24 @@ class Attention(nn.Module):
             in_shapes=(q_embed_dim,),
             out_features=(num_query_heads, head_dim),
             axis=(-1,),
-            dtype=compute_dtype,
             weight_dtype=weight_dtype,
         )
         self.k_proj = DenseGeneral(
             in_shapes=(kv_embed_dim,),
             out_features=(num_kv_heads, head_dim),
             axis=(-1,),
-            dtype=compute_dtype,
             weight_dtype=weight_dtype,
         )
         self.v_proj = DenseGeneral(
             in_shapes=(kv_embed_dim,),
             out_features=(num_kv_heads, head_dim),
             axis=(-1,),
-            dtype=compute_dtype,
             weight_dtype=weight_dtype,
         )
         self.o_proj = DenseGeneral(
             in_shapes=(num_query_heads, head_dim),
             out_features=(self.output_dim,),
             axis=(-2, -1),
-            dtype=compute_dtype,
             weight_dtype=weight_dtype,
         )
 
@@ -350,6 +329,11 @@ class Attention(nn.Module):
                     new_kv_cache = Xk_BxNxSxH, Xv_BxNxSxH
                     attn_k, attn_v = cache.get_kv_for_attention(Xk_BxNxSxH, Xv_BxNxSxH)
 
+        query_dtype = Xq_BxNxTxH.dtype
+        if attn_k.dtype != query_dtype or attn_v.dtype != query_dtype:
+            attn_k = attn_k.to(query_dtype)
+            attn_v = attn_v.to(query_dtype)
+
         attn_output = F.scaled_dot_product_attention(
             Xq_BxNxTxH,
             attn_k,
@@ -399,7 +383,6 @@ class EncoderLayer(nn.Module):
             config=config,
             embed_dim=embed_dim,
             intermediate_dim=enc_config.n_hidden,
-            use_pre_norm=enc_config.use_pre_norm,
         )
 
     def forward(
@@ -521,7 +504,6 @@ class DecoderLayer(nn.Module):
             config=config,
             embed_dim=dec_embed_dim,
             intermediate_dim=dec_config.n_hidden,
-            use_pre_norm=dec_config.use_pre_norm,
         )
 
     def forward(
@@ -607,10 +589,8 @@ class Decoder(nn.Module):
             in_shapes=(dec_config.n_embd,),
             out_features=(self.num_channels, model_config.tgt_vocab_size),
             axis=(-1,),
-            dtype=(torch.float32 if train_config.logits_dot_in_fp32 else compute_dtype),
             weight_dtype=weight_dtype,
         )
-        self.logits_in_fp32 = train_config.logits_dot_in_fp32
 
     def precompute_cross_attention_kv(
         self,
