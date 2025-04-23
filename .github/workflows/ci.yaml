@@ -4,9 +4,6 @@ on:
   pull_request:
     branches:
       - main
-  push:
-    branches:
-      - ruff-ci
 
 jobs:
   lint_and_format:
