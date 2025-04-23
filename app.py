@@ -386,5 +386,8 @@ with gr.Blocks(css=css) as demo:
 
 # --- Launch the App ---
 if __name__ == "__main__":
+    port = int(os.environ.get("GRADIO_PORT", 7860))
+    
     print("Launching Gradio interface...")
-    demo.launch(server_name="0.0.0.0", share=args.share)
+    # Updated for Gradio 5.x: use server_port
+    demo.launch(server_name="0.0.0.0", server_port=port, share=args.share)
