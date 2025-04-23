@@ -15,6 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/ruff-action@v3
+        with:
+          version: v0.11.6
 
       - name: Check Lint using Ruff
         run: ruff check
