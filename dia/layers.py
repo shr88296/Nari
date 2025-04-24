@@ -1,5 +1,3 @@
-from typing import Any
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,25 +5,11 @@ from torch import Tensor
 from torch.nn import RMSNorm
 
 from .config import DiaConfig
-from .state import KVCache
+from .state import DecoderInferenceState, EncoderInferenceState, KVCache
 
 
 def _normalize_axes(axes: tuple[int, ...], ndim: int) -> tuple[int, ...]:
     return tuple(ax if ax >= 0 else ndim + ax for ax in axes)
-
-
-def _str_to_dtype(dtype_str: str) -> torch.dtype | None:
-    # Allow None for default behavior
-    if dtype_str is None or dtype_str.lower() == "none":
-        return None
-    if dtype_str == "float32":
-        return torch.float32
-    elif dtype_str == "float16":
-        return torch.float16
-    elif dtype_str == "bfloat16":
-        return torch.bfloat16
-    else:
-        raise ValueError(f"Unsupported dtype string: {dtype_str}")
 
 
 class DenseGeneral(nn.Module):
@@ -69,8 +53,8 @@ class DenseGeneral(nn.Module):
         kernel_contract_axes = tuple(range(len(norm_axis)))
 
         output = torch.tensordot(
-            inputs.float(),
-            self.weight.float(),
+            inputs.to(self.weight.dtype),
+            self.weight,
             dims=(norm_axis, kernel_contract_axes),
         ).to(inputs.dtype)
         return output
@@ -79,29 +63,22 @@ class DenseGeneral(nn.Module):
 class MlpBlock(nn.Module):
     """MLP block using DenseGeneral."""
 
-    def __init__(
-        self,
-        config: DiaConfig,
-        embed_dim: int,
-        intermediate_dim: int,
-    ):
+    def __init__(self, embed_dim: int, intermediate_dim: int, compute_dtype: torch.dtype):
         super().__init__()
-        compute_dtype = _str_to_dtype(config.training.dtype)
-        weight_dtype = _str_to_dtype(config.model.weight_dtype)
         self.dtype = compute_dtype
 
         self.wi_fused = DenseGeneral(
             in_shapes=(embed_dim,),
             out_features=(2, intermediate_dim),
             axis=(-1,),
-            weight_dtype=weight_dtype,
+            weight_dtype=compute_dtype,
         )
 
         self.wo = DenseGeneral(
             in_shapes=(intermediate_dim,),
             out_features=(embed_dim,),
             axis=(-1,),
-            weight_dtype=weight_dtype,
+            weight_dtype=compute_dtype,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -171,6 +148,7 @@ class Attention(nn.Module):
         num_query_heads: int,
         num_kv_heads: int,
         head_dim: int,
+        compute_dtype: torch.dtype,
         is_cross_attn: bool = False,
         out_embed_dim: int | None = None,
     ):
@@ -179,8 +157,6 @@ class Attention(nn.Module):
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
         self.is_cross_attn = is_cross_attn
-        compute_dtype = _str_to_dtype(config.training.dtype)
-        weight_dtype = _str_to_dtype(config.model.weight_dtype)
         self.output_dim = out_embed_dim if out_embed_dim is not None else q_embed_dim
         self.projected_query_dim = num_query_heads * head_dim
         if num_query_heads % num_kv_heads != 0:
@@ -192,25 +168,25 @@ class Attention(nn.Module):
             in_shapes=(q_embed_dim,),
             out_features=(num_query_heads, head_dim),
             axis=(-1,),
-            weight_dtype=weight_dtype,
+            weight_dtype=compute_dtype,
         )
         self.k_proj = DenseGeneral(
             in_shapes=(kv_embed_dim,),
             out_features=(num_kv_heads, head_dim),
             axis=(-1,),
-            weight_dtype=weight_dtype,
+            weight_dtype=compute_dtype,
         )
         self.v_proj = DenseGeneral(
             in_shapes=(kv_embed_dim,),
             out_features=(num_kv_heads, head_dim),
             axis=(-1,),
-            weight_dtype=weight_dtype,
+            weight_dtype=compute_dtype,
         )
         self.o_proj = DenseGeneral(
             in_shapes=(num_query_heads, head_dim),
             out_features=(self.output_dim,),
             axis=(-2, -1),
-            weight_dtype=weight_dtype,
+            weight_dtype=compute_dtype,
         )
 
         # --- Rotary Embedding ---
@@ -229,7 +205,8 @@ class Attention(nn.Module):
         kv_positions: torch.Tensor | None = None,  # (B, S)
         attn_mask: torch.Tensor | None = None,  # None in Decoder Self Attention, Valid mask in Others
         cache: KVCache | None = None,  # None in Encoder, KVCache in Decoder
-        prefill: bool = False,  # True only when prefilling KV Cache
+        prefill: bool = False,
+        is_causal: bool = False,
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         """
         Performs attention calculation with optional KV caching.
@@ -261,12 +238,6 @@ class Attention(nn.Module):
 
         if self.is_cross_attn:
             attn_k, attn_v = cache.k, cache.v
-            if attn_k.shape[1] != self.num_query_heads or attn_v.shape[1] != self.num_query_heads:
-                raise ValueError(
-                    f"Cross-attention cache head dimension ({attn_k.shape[1]}) "
-                    f"does not match num_query_heads ({self.num_query_heads}). "
-                    "Cache should be pre-repeated for GQA."
-                )
         else:
             Xk_BxSxKxH = self.k_proj(Xkv)  # (B, S, K, H)
             Xv_BxSxKxH = self.v_proj(Xkv)  # (B, S, K, H)
@@ -274,20 +245,16 @@ class Attention(nn.Module):
 
             Xk_BxKxSxH = Xk_BxSxKxH.transpose(1, 2)  # (B, K, S, H)
             Xv_BxKxSxH = Xv_BxSxKxH.transpose(1, 2)  # (B, K, S, H)
-            # S=1 for Decode Step
-
-            Xk_BxNxSxH = Xk_BxKxSxH
-            Xv_BxNxSxH = Xv_BxKxSxH
 
             if cache is None:
-                attn_k = Xk_BxNxSxH
-                attn_v = Xv_BxNxSxH
+                attn_k = Xk_BxKxSxH
+                attn_v = Xv_BxKxSxH
             else:
                 if prefill:
-                    attn_k, attn_v = Xk_BxNxSxH, Xv_BxNxSxH
+                    attn_k, attn_v = Xk_BxKxSxH, Xv_BxKxSxH
                     cache.prefill(attn_k, attn_v)
                 else:
-                    attn_k, attn_v = cache.update_one(Xk_BxNxSxH, Xv_BxNxSxH)
+                    attn_k, attn_v = cache.update(Xk_BxKxSxH, Xv_BxKxSxH)
 
         attn_output = F.scaled_dot_product_attention(
             Xq_BxNxTxH,
@@ -296,6 +263,7 @@ class Attention(nn.Module):
             attn_mask=attn_mask,
             scale=1.0,
             enable_gqa=self.num_gqa_groups > 1,
+            is_causal=is_causal,
         )
 
         attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, N, H)
@@ -307,7 +275,7 @@ class Attention(nn.Module):
 class EncoderLayer(nn.Module):
     """Transformer Encoder Layer using DenseGeneral."""
 
-    def __init__(self, config: DiaConfig):
+    def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
         model_config = config.model
@@ -320,12 +288,13 @@ class EncoderLayer(nn.Module):
             dtype=torch.float32,
         )
         self.self_attention = Attention(
-            config=config,
+            config,
             q_embed_dim=embed_dim,
             kv_embed_dim=embed_dim,
             num_query_heads=enc_config.n_head,
             num_kv_heads=enc_config.n_head,
             head_dim=enc_config.head_dim,
+            compute_dtype=compute_dtype,
             is_cross_attn=False,
             out_embed_dim=embed_dim,
         )
@@ -334,27 +303,21 @@ class EncoderLayer(nn.Module):
             eps=model_config.normalization_layer_epsilon,
             dtype=torch.float32,
         )
-        self.mlp = MlpBlock(
-            config=config,
-            embed_dim=embed_dim,
-            intermediate_dim=enc_config.n_hidden,
-        )
+        self.mlp = MlpBlock(embed_dim=embed_dim, intermediate_dim=enc_config.n_hidden, compute_dtype=compute_dtype)
 
     def forward(
         self,
         x: torch.Tensor,
-        src_positions: torch.Tensor | None = None,
-        attn_mask: torch.Tensor | None = None,
+        state: EncoderInferenceState,
     ) -> torch.Tensor:
         residual = x
         x_norm = self.pre_sa_norm(x)
-
         sa_out = self.self_attention(
             Xq=x_norm,
             Xkv=x_norm,
-            q_positions=src_positions,
-            kv_positions=src_positions,
-            attn_mask=attn_mask,
+            q_positions=state.positions,
+            kv_positions=state.positions,
+            attn_mask=state.attn_mask,
         )
         x = residual + sa_out
 
@@ -369,20 +332,18 @@ class EncoderLayer(nn.Module):
 class Encoder(nn.Module):
     """Transformer Encoder Stack using DenseGeneral."""
 
-    def __init__(self, config: DiaConfig):
+    def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
         model_config = config.model
         enc_config = config.model.encoder
-        compute_dtype = _str_to_dtype(config.training.dtype)
 
         self.embedding = nn.Embedding(
             model_config.src_vocab_size,
             enc_config.n_embd,
             dtype=compute_dtype,
         )
-        self.dropout = nn.Dropout(model_config.dropout)
-        self.layers = nn.ModuleList([EncoderLayer(config=config) for _ in range(enc_config.n_layer)])
+        self.layers = nn.ModuleList([EncoderLayer(config, compute_dtype) for _ in range(enc_config.n_layer)])
         self.norm = RMSNorm(
             enc_config.n_embd,
             eps=model_config.normalization_layer_epsilon,
@@ -392,13 +353,13 @@ class Encoder(nn.Module):
     def forward(
         self,
         x_ids: torch.Tensor,
-        src_positions: torch.Tensor | None = None,
-        attn_mask: torch.Tensor | None = None,
+        state: EncoderInferenceState,
     ) -> torch.Tensor:
         x = self.embedding(x_ids)
 
         for layer in self.layers:
-            x = layer(x, src_positions=src_positions, attn_mask=attn_mask)
+            x = layer(x, state)
+
         x = self.norm(x)
         return x
 
@@ -406,7 +367,7 @@ class Encoder(nn.Module):
 class DecoderLayer(nn.Module):
     """Transformer Decoder Layer using DenseGeneral."""
 
-    def __init__(self, config: DiaConfig):
+    def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
         model_config = config.model
@@ -434,12 +395,13 @@ class DecoderLayer(nn.Module):
 
         # Self-Attention (GQA) with Causal Masking
         self.self_attention = Attention(
-            config=config,
+            config,
             q_embed_dim=dec_embed_dim,
             kv_embed_dim=dec_embed_dim,
             num_query_heads=dec_config.gqa_query_heads,
             num_kv_heads=dec_config.kv_heads,
             head_dim=dec_config.gqa_head_dim,
+            compute_dtype=compute_dtype,
             is_cross_attn=False,
             out_embed_dim=dec_embed_dim,
         )
@@ -451,26 +413,23 @@ class DecoderLayer(nn.Module):
             num_query_heads=dec_config.cross_query_heads,
             num_kv_heads=dec_config.cross_query_heads,
             head_dim=dec_config.cross_head_dim,
+            compute_dtype=compute_dtype,
             is_cross_attn=True,
             out_embed_dim=dec_embed_dim,
         )
         # MLP
         self.mlp = MlpBlock(
-            config=config,
             embed_dim=dec_embed_dim,
             intermediate_dim=dec_config.n_hidden,
+            compute_dtype=compute_dtype,
         )
 
     def forward(
         self,
         x: torch.Tensor,
-        encoder_out: torch.Tensor,
-        tgt_positions: torch.Tensor,
-        src_positions: torch.Tensor | None,
-        self_attn_mask: torch.Tensor,
-        cross_attn_mask: torch.Tensor,
-        self_attn_cache: KVCache,
-        cross_attn_cache: KVCache,
+        state: DecoderInferenceState,
+        self_attn_cache: KVCache | None = None,
+        cross_attn_cache: KVCache | None = None,
         prefill: bool = False,
     ) -> torch.Tensor:
         residual = x
@@ -479,11 +438,12 @@ class DecoderLayer(nn.Module):
         sa_out = self.self_attention(
             Xq=x_norm,  # (2, 1, D)
             Xkv=x_norm,  # (2, 1, D)
-            q_positions=tgt_positions,  # (2, 1)
-            kv_positions=tgt_positions,  # (2, 1)
-            attn_mask=self_attn_mask,  # (2, 1, 1, S_max)
+            q_positions=state.dec_positions,  # (2, 1)
+            kv_positions=state.dec_positions,  # (2, 1)
+            attn_mask=None,
             cache=self_attn_cache,
             prefill=prefill,
+            is_causal=prefill,
         )
 
         x = residual + sa_out
@@ -492,10 +452,10 @@ class DecoderLayer(nn.Module):
         x_norm = self.pre_ca_norm(x)
         ca_out = self.cross_attention(
             Xq=x_norm,
-            Xkv=encoder_out,
-            q_positions=tgt_positions,
-            kv_positions=src_positions,
-            attn_mask=cross_attn_mask,
+            Xkv=state.enc_out,
+            q_positions=state.dec_positions,
+            kv_positions=state.enc_positions,
+            attn_mask=state.dec_cross_attn_mask,
             cache=cross_attn_cache,
         )
         x = residual + ca_out
@@ -511,14 +471,12 @@ class DecoderLayer(nn.Module):
 class Decoder(nn.Module):
     """Transformer Decoder Stack using DenseGeneral."""
 
-    def __init__(self, config: DiaConfig):
+    def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
         model_config = config.model
         dec_config = config.model.decoder
         data_config = config.data
-        compute_dtype = _str_to_dtype(config.training.dtype)
-        weight_dtype = _str_to_dtype(config.model.weight_dtype)
         self.num_channels = data_config.channels
         self.num_layers = dec_config.n_layer
 
@@ -528,8 +486,10 @@ class Decoder(nn.Module):
                 for _ in range(self.num_channels)
             ]
         )
-        self.dropout = nn.Dropout(model_config.dropout)
-        self.layers = nn.ModuleList([DecoderLayer(config=config) for _ in range(self.num_layers)])
+        self.layers = nn.ModuleList(
+            [DecoderLayer(config=config, compute_dtype=compute_dtype) for _ in range(self.num_layers)]
+        )
+
         self.norm = RMSNorm(
             dec_config.n_embd,
             eps=model_config.normalization_layer_epsilon,
@@ -540,14 +500,13 @@ class Decoder(nn.Module):
             in_shapes=(dec_config.n_embd,),
             out_features=(self.num_channels, model_config.tgt_vocab_size),
             axis=(-1,),
-            weight_dtype=weight_dtype,
+            weight_dtype=compute_dtype,
         )
 
-    def precompute_cross_attention_kv(
+    def precompute_cross_attn_cache(
         self,
-        max_len: int,
-        encoder_out: torch.Tensor,  # (B, S, E)
-        src_positions: torch.Tensor | None,  # (B, S)
+        enc_out: torch.Tensor,  # (B, S, E)
+        enc_positions: torch.Tensor,  # (B, S)
     ) -> list[KVCache]:
         """
         Computes the Key and Value tensors for cross-attention for each layer from the encoder output.
@@ -556,36 +515,21 @@ class Decoder(nn.Module):
 
         for layer in self.layers:
             cross_attn_module = layer.cross_attention
-            k_proj = cross_attn_module.k_proj(encoder_out)
-            v_proj = cross_attn_module.v_proj(encoder_out)
+            k_proj = cross_attn_module.k_proj(enc_out)
+            v_proj = cross_attn_module.v_proj(enc_out)
 
-            k_proj = cross_attn_module.rotary_emb(k_proj, position=src_positions)
+            k_proj = cross_attn_module.rotary_emb(k_proj, position=enc_positions)
             k = k_proj.transpose(1, 2)
             v = v_proj.transpose(1, 2)
 
-            per_layer_kv_cache.append(
-                KVCache(
-                    cross_attn_module.num_kv_heads,
-                    max_len,
-                    cross_attn_module.head_dim,
-                    torch.bfloat16,
-                    k.device,
-                    k=k,
-                    v=v,
-                )
-            )
+            per_layer_kv_cache.append(KVCache.from_kv(k, v))
 
         return per_layer_kv_cache
 
     def decode_step(
         self,
         tgt_ids_Bx1xC: torch.Tensor,  # [B, 1, C]
-        tgt_pos_Bx1: torch.Tensor,  # [B, 1]
-        encoder_out: torch.Tensor,  # [B, S, E]
-        self_attn_mask: Any,  # None
-        cross_attn_mask: torch.Tensor,  # [B, 1, 1, S]
-        self_attention_cache: list[KVCache],
-        cross_attention_cache: list[KVCache],
+        state: DecoderInferenceState,
     ) -> torch.Tensor:
         """
         Performs a single decoding step, managing KV caches layer by layer.
@@ -594,7 +538,6 @@ class Decoder(nn.Module):
             A tuple containing:
             - logits_Bx1xCV: The final output logits for the current step (B, 1, C*V), cast to float32.
         """
-        assert self_attn_mask is None, "Self-attention mask should be None, kept for pattern"
 
         x = None
         for i in range(self.num_channels):
@@ -603,15 +546,11 @@ class Decoder(nn.Module):
             x = channel_embed if x is None else x + channel_embed
 
         for i, layer in enumerate(self.layers):
-            self_cache = self_attention_cache[i]
-            cross_cache = cross_attention_cache[i]
+            self_cache = state.self_attn_cache[i]
+            cross_cache = state.cross_attn_cache[i]
             x = layer(
                 x,  # (2, 1, D)
-                encoder_out,  # (2, S, E)
-                src_positions=None,  # CA KV is already computed
-                tgt_positions=tgt_pos_Bx1,  # (2, 1)
-                self_attn_mask=None,
-                cross_attn_mask=cross_attn_mask,
+                state,
                 self_attn_cache=self_cache,
                 cross_attn_cache=cross_cache,
             )
@@ -621,17 +560,7 @@ class Decoder(nn.Module):
 
         return logits_Bx1xCxV.to(torch.float32)
 
-    def forward(
-        self,
-        tgt_ids_BxTxC: torch.Tensor,
-        encoder_out: torch.Tensor,
-        tgt_positions: torch.Tensor,
-        src_positions: torch.Tensor,
-        self_attn_mask: torch.Tensor,
-        cross_attn_mask: torch.Tensor,
-        self_attention_cache: list[KVCache],
-        cross_attention_cache: list[KVCache],
-    ) -> torch.Tensor:
+    def forward(self, tgt_ids_BxTxC: torch.Tensor, state: DecoderInferenceState) -> torch.Tensor:
         """
         Forward pass for the Decoder stack, managing KV caches.
 
@@ -666,17 +595,9 @@ class Decoder(nn.Module):
             x = channel_embed if x is None else x + channel_embed
 
         for i, layer in enumerate(self.layers):
-            x = layer(
-                x,
-                encoder_out,
-                tgt_positions=tgt_positions,
-                src_positions=src_positions,
-                self_attn_mask=self_attn_mask,
-                cross_attn_mask=cross_attn_mask,
-                self_attn_cache=self_attention_cache[i],
-                cross_attn_cache=cross_attention_cache[i],
-                prefill=True,
-            )
+            self_cache = state.self_attn_cache[i]
+            cross_cache = state.cross_attn_cache[i]
+            x = layer(x, state, self_attn_cache=self_cache, cross_attn_cache=cross_cache, prefill=True)
 
         # Final Norm
         x = self.norm(x)
@@ -688,38 +609,8 @@ class Decoder(nn.Module):
 class DiaModel(nn.Module):
     """PyTorch Dia Model using DenseGeneral."""
 
-    def __init__(self, config: DiaConfig):
+    def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
-        self.encoder = Encoder(config)
-        self.decoder = Decoder(config)
-
-    def forward(
-        self,
-        src_BxS: torch.Tensor,
-        tgt_BxTxC: torch.Tensor,
-        src_positions: torch.Tensor | None = None,
-        tgt_positions: torch.Tensor | None = None,
-        enc_self_attn_mask: torch.Tensor | None = None,
-        dec_self_attn_mask: torch.Tensor | None = None,
-        dec_cross_attn_mask: torch.Tensor | None = None,
-    ):
-        # --- Encoder Pass ---
-        encoder_out = self.encoder(
-            x_ids=src_BxS,
-            src_positions=src_positions,
-            attn_mask=enc_self_attn_mask,
-        )
-
-        # --- Decoder Pass ---
-        logits = self.decoder(
-            tgt_ids_BxTxC=tgt_BxTxC,
-            encoder_out=encoder_out,
-            tgt_positions=tgt_positions,
-            src_positions=src_positions,
-            self_attn_mask=dec_self_attn_mask,
-            cross_attn_mask=dec_cross_attn_mask,
-            precomputed_cross_attn_kv=None,
-        )
-
-        return logits
+        self.encoder = Encoder(config, compute_dtype)
+        self.decoder = Decoder(config, compute_dtype)

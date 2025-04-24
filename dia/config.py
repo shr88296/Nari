@@ -127,18 +127,7 @@ class ModelConfig(BaseModel, frozen=True):
 
 
 class TrainingConfig(BaseModel, frozen=True):
-    """Training process configuration and hyperparameters.
-
-    Note: This configuration currently only includes precision settings.
-    Other training parameters (like batch size, learning rate, optimizer settings)
-    are assumed to be handled externally.
-
-    Attributes:
-        dtype: Data type for activations during training (e.g., "bfloat16", "float32").
-        logits_dot_in_fp32: Whether to compute the final logits dot product in fp32 for stability.
-    """
-
-    dtype: str = Field(default="bfloat16", description="Activation precision")
+    pass
 
 
 class DiaConfig(BaseModel, frozen=True):
@@ -155,6 +144,7 @@ class DiaConfig(BaseModel, frozen=True):
 
     version: str = Field(default="1.0")
     model: ModelConfig
+    # TODO: remove training. this is just for backwards-compatability
     training: TrainingConfig
     data: DataConfig
 

@@ -45,7 +45,6 @@ class EncoderInferenceState:
 
     max_seq_len: int
     device: torch.device
-    dtype: torch.dtype
     positions: torch.Tensor
     padding_mask: torch.Tensor
     attn_mask: torch.Tensor
@@ -62,7 +61,6 @@ class EncoderInferenceState:
         return cls(
             max_seq_len=config.data.text_length,
             device=device,
-            dtype=config.training.dtype,
             positions=positions,
             padding_mask=padding_mask,
             attn_mask=attn_mask,
@@ -83,11 +81,20 @@ class KVCache:
         self.k = torch.zeros((2, num_heads, max_len, head_dim), dtype=dtype, device=device) if k is None else k
         self.v = torch.zeros((2, num_heads, max_len, head_dim), dtype=dtype, device=device) if v is None else v
         self.current_idx = torch.tensor(0)
-        self.max_len = max_len
 
-    def update_one(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        assert self.current_idx < self.max_len
-        assert k.shape[2] == 1
+    @classmethod
+    def from_kv(cls, k: torch.Tensor, v: torch.Tensor) -> "KVCache":
+        return cls(
+            num_heads=k.shape[1],
+            max_len=k.shape[2],
+            head_dim=k.shape[3],
+            dtype=k.dtype,
+            device=k.device,
+            k=k,
+            v=v,
+        )
+
+    def update(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         self.k[:, :, self.current_idx : self.current_idx + 1, :] = k
         self.v[:, :, self.current_idx : self.current_idx + 1, :] = v
         self.current_idx += 1
@@ -95,105 +102,102 @@ class KVCache:
 
     def prefill(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         prefill_len = k.shape[2]
-        assert prefill_len <= self.max_len
         self.k[:, :, :prefill_len, :] = k
         self.v[:, :, :prefill_len, :] = v
-        self.current_idx = prefill_len
-        return self.k[:, :, : self.current_idx, :], self.v[:, :, : self.current_idx, :]
+        self.current_idx = prefill_len - 1
 
 
 @dataclass
 class DecoderInferenceState:
     """Parameters specifically for decoder inference."""
 
-    max_seq_len: int
     device: torch.device
     dtype: torch.dtype
-    enc_positions: torch.Tensor
     enc_out: torch.Tensor
+    enc_positions: torch.Tensor
     dec_positions: torch.Tensor
     dec_cross_attn_mask: torch.Tensor
     self_attn_cache: list[KVCache]
     cross_attn_cache: list[KVCache]
-    step: int
-    generated_tokens: torch.Tensor
-    audio_pad_value: int
 
     @classmethod
     def new(
-        cls, config: DiaConfig, enc_state: EncoderInferenceState, enc_out: torch.Tensor
+        cls,
+        config: DiaConfig,
+        enc_state: EncoderInferenceState,
+        enc_out: torch.Tensor,
+        dec_cross_attn_cache: list[KVCache],
+        compute_dtype: torch.dtype,
     ) -> "DecoderInferenceState":
         """Creates DecoderInferenceParams from DiaConfig and a device."""
         device = enc_out.device
         max_audio_len = config.data.audio_length
 
-        step = 0
-        dec_positions = torch.full((2, 1), fill_value=step, dtype=torch.long, device=device)
+        dec_positions = torch.full((2, 1), fill_value=0, dtype=torch.long, device=device)
         tgt_padding_mask = torch.ones((2, 1), dtype=torch.bool, device=device)
         dec_cross_attn_mask = create_attn_mask(tgt_padding_mask, enc_state.padding_mask, device, is_causal=False)
-        generated_tokens = torch.full(
-            (1, max_audio_len, config.data.channels),
-            fill_value=config.data.audio_pad_value,
-            dtype=torch.long,
-            device=device,
-        )
 
         self_attn_cache = [
             KVCache(
                 config.model.decoder.kv_heads,
                 max_audio_len,
                 config.model.decoder.gqa_head_dim,
-                device,
-            )
-            for _ in range(config.model.decoder.n_layer)
-        ]
-
-        cross_attn_cache = [
-            KVCache(
-                config.model.decoder.cross_query_heads,
-                config.data.text_length,
-                config.model.decoder.cross_head_dim,
+                compute_dtype,
                 device,
             )
             for _ in range(config.model.decoder.n_layer)
         ]
 
         return cls(
-            max_seq_len=max_audio_len,
             device=device,
-            dtype=config.training.dtype,
+            dtype=compute_dtype,
             enc_out=enc_out,
             enc_positions=enc_state.positions,
             dec_positions=dec_positions,
             dec_cross_attn_mask=dec_cross_attn_mask,
             self_attn_cache=self_attn_cache,
-            cross_attn_cache=cross_attn_cache,
-            step=step,
-            generated_tokens=generated_tokens,
-            audio_pad_value=config.data.audio_pad_value,
+            cross_attn_cache=dec_cross_attn_cache,
         )
 
-    def update_one(self, dec_out: torch.Tensor, apply_mask: bool = False):
+    def prepare_step(self, step_from: int, step_to: int | None = None) -> None:
+        if step_to is None:
+            step_to = step_from + 1
+        self.dec_positions = torch.arange(step_from, step_to, device=self.device).unsqueeze(0).expand(2, -1)
+
+
+@dataclass
+class DecoderOutput:
+    generated_tokens: torch.Tensor
+    prefill_step: int
+
+    @classmethod
+    def new(cls, config: DiaConfig, device: torch.device) -> "DecoderOutput":
+        max_audio_len = config.data.audio_length
+        return cls(
+            generated_tokens=torch.full(
+                (max_audio_len, config.data.channels),
+                fill_value=-1,
+                dtype=torch.int,
+                device=device,
+            ),
+            prefill_step=0,
+        )
+
+    def get_tokens_at(self, step_from: int, step_to: int | None = None) -> torch.Tensor:
+        if step_to is None:
+            step_to = step_from + 1
+        return self.generated_tokens[step_from:step_to, :]
+
+    def update_one(self, dec_out: torch.Tensor, step: int, apply_mask: bool = False):
         if apply_mask:
-            mask = self.generated_tokens[:, self.step : self.step + 1, :] == self.audio_pad_value
-            self.generated_tokens[:, self.step : self.step + 1, :] = torch.where(
-                mask, dec_out, self.generated_tokens[:, self.step : self.step + 1, :]
+            mask = self.generated_tokens[step : step + 1, :] == -1
+            self.generated_tokens[step : step + 1, :] = torch.where(
+                mask, dec_out, self.generated_tokens[step : step + 1, :]
             )
         else:
-            self.generated_tokens[:, self.step : self.step + 1, :] = dec_out
-        self.step += 1
-        self.dec_positions = torch.arange(self.step, self.step + 1, device=self.device).unsqueeze(0).expand(2, -1)
+            self.generated_tokens[step : step + 1, :] = dec_out
 
-    def prefill(self, dec_out: torch.Tensor, d_step: int | None = None, apply_mask: bool = False):
-        step_before = self.step
-        step_to = self.step + dec_out.shape[1]
-        if apply_mask:
-            mask = self.generated_tokens[:, step_before:step_to, :] == self.audio_pad_value
-            self.generated_tokens[:, step_before:step_to, :] = torch.where(
-                mask, dec_out, self.generated_tokens[:, step_before:step_to, :]
-            )
-        else:
-            self.generated_tokens[:, step_before:step_to, :] = dec_out
-
-        self.step = step_to
-        self.dec_positions = torch.arange(step_before, step_to, device=self.device).unsqueeze(0).expand(2, -1)
+    def prefill(self, dec_out: torch.Tensor, prefill_step: int):
+        length = dec_out.shape[0]
+        self.generated_tokens[0:length, :] = dec_out
+        self.prefill_step = prefill_step
