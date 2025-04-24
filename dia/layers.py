@@ -7,7 +7,6 @@ from torch import Tensor
 from torch.nn import RMSNorm
 
 from huggingface_hub import PyTorchModelHubMixin
-from pydantic import BaseModel
 
 from .config import DiaConfig
 
@@ -831,18 +830,19 @@ class Decoder(nn.Module):
         return logits_BxTxCxV.to(torch.float32)
 
 
-class DiaModel(nn.Module,
-               PyTorchModelHubMixin,
-               repo_url="https://github.com/nari-labs/dia",
-               pipeline_tag="text-to-speech",
-               license="apache-2.0",
-               coders={
-                DiaConfig: (
-                    lambda x: x.dict(),
-                    lambda data: DiaConfig.model_validate(**data),
-                ),
-            },
-    ):
+class DiaModel(
+    nn.Module,
+    PyTorchModelHubMixin,
+    repo_url="https://github.com/nari-labs/dia",
+    pipeline_tag="text-to-speech",
+    license="apache-2.0",
+    coders={
+        DiaConfig: (
+            lambda x: x.dict(),
+            lambda data: DiaConfig.model_validate(**data),
+        ),
+    },
+):
     """PyTorch Dia Model using DenseGeneral."""
 
     def __init__(self, config: DiaConfig):
