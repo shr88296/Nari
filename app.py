@@ -368,4 +368,4 @@ if __name__ == "__main__":
     
     # set `GRADIO_SERVER_NAME`, `GRADIO_SERVER_PORT` env vars to override default values
     # use `GRADIO_SERVER_NAME=0.0.0.0` for Docker
-    demo.launch(server_name="0.0.0.0", share=args.share)
+    demo.launch(share=args.share)
