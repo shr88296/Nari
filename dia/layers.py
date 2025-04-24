@@ -256,9 +256,6 @@ class Attention(nn.Module):
                 else:
                     attn_k, attn_v = cache.update(Xk_BxKxSxH, Xv_BxKxSxH)
 
-        target_dtype = Xq_BxNxTxH.dtype
-        attn_k = attn_k.to(target_dtype)    
-        attn_v = attn_v.to(target_dtype)
         attn_output = F.scaled_dot_product_attention(
             Xq_BxNxTxH,
             attn_k,
