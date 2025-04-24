@@ -1,0 +1,33 @@
+services:
+  dia-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    profiles: ["app"]
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  dia-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile.cli
+    profiles: ["cli"]
+    volumes:
+      - ./data:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
