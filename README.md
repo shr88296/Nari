@@ -15,7 +15,7 @@
 
 Dia is a 1.6B parameter text to speech model created by Nari Labs.
 
-Dia **directly generates highly realistic dialogue from a transcript**. You can condition the output on audio, enabling emotion and tone control. The model can also produce nonverbal communications like laughter, coughing, clearing throat, etc.
+Dia **directly generates highly realistic dialogue from a transcript**. You can condition the output on audio, enabling emotion and tone control. The model can also produce nonverbal communication like laughter, coughing, clearing throat, etc.
 
 To accelerate research, we are providing access to pretrained model checkpoints and inference code. The model weights are hosted on [Hugging Face](https://huggingface.co/nari-labs/Dia-1.6B). The model only supports English generation at the moment.
 
@@ -23,7 +23,7 @@ We also provide a [demo page](https://yummy-fir-7a4.notion.site/dia) comparing o
 
 - (Update) We have a ZeroGPU Space running! Try it now [here](https://huggingface.co/spaces/nari-labs/Dia-1.6B). Thanks to the HF team for the support :)
 - Join our [discord server](https://discord.gg/pgdB5YRe) for community support and access to new features.
-- Play with a larger version of Dia: generate fun conversations, remix content, and share with friends. 🔮 Join the [waitlist](https://tally.so/r/meokbo) for early access.
+- Try out a larger version of Dia: generate fun conversations, remix content, and share with friends. 🔮 Join the [waitlist](https://tally.so/r/meokbo) for early access.
 
 ## ⚡️ Quickstart
 
@@ -54,14 +54,14 @@ pip install -e .
 python app.py
 ```
 
-Note that the model was not fine-tuned on a specific voice. Hence, you will get different voices every time you run the model.
+Note that this model hasn’t been fine-tuned on a specific voice. Hence, you will get different voices every time you run the model.
 You can keep speaker consistency by either adding an audio prompt (a guide coming VERY soon - try it with the second example on Gradio for now), or fixing the seed.
 
 ## Features
 
 - Generate dialogue via `[S1]` and `[S2]` tag
-- Generate non-verbal like `(laughs)`, `(coughs)`, etc.
-  - Below verbal tags will be recognized, but might result in unexpected output.
+- Generate nonverbal sounds like `(laughs)`, `(coughs)`, etc.
+  - The verbal tags listed below will be recognized, but might result in unexpected output.
   - `(laughs), (clears throat), (sighs), (gasps), (coughs), (singing), (sings), (mumbles), (beep), (groans), (sniffs), (claps), (screams), (inhales), (exhales), (applause), (burps), (humming), (sneezes), (chuckle), (whistles)`
 - Voice cloning. See [`example/voice_clone.py`](example/voice_clone.py) for more information.
   - In the Hugging Face space, you can upload the audio you want to clone and place its transcript before your script. Make sure the transcript follows the required format. The model will then output only the content of your script.
@@ -78,7 +78,7 @@ from dia.model import Dia
 
 model = Dia.from_pretrained("nari-labs/Dia-1.6B")
 
-text = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
+text = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on GitHub or Hugging Face."
 
 output = model.generate(text)
 
@@ -122,7 +122,7 @@ By using this model, you agree to uphold relevant legal standards and ethical re
 
 ## 🤝 Contributing
 
-We are a tiny team of 1 full-time and 1 part-time research-engineers. We are extra-welcome to any contributions!
+We are a tiny team of 1 full-time and 1 part-time research-engineers. We warmly welcome all contributions!
 Join our [Discord Server](https://discord.gg/pgdB5YRe) for discussions.
 
 ## 🤗 Acknowledgements
@@ -131,7 +131,7 @@ Join our [Discord Server](https://discord.gg/pgdB5YRe) for discussions.
 - Our work was heavily inspired by [SoundStorm](https://arxiv.org/abs/2305.09636), [Parakeet](https://jordandarefsky.com/blog/2024/parakeet/), and [Descript Audio Codec](https://github.com/descriptinc/descript-audio-codec).
 - Hugging Face for providing the ZeroGPU Grant.
 - "Nari" is a pure Korean word for lily.
-- We thank Jason Y. for providing help with data filtering.
+- We thank Jason Y. for his help with data filtering.
 
 
 ## ⭐ Star History
