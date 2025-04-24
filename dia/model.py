@@ -171,8 +171,8 @@ class Dia:
             FileNotFoundError: If config or checkpoint download/loading fails.
             RuntimeError: If there is an error loading the checkpoint.
         """
-        config_path = hf_hub_download(repo_id=model_name, filename="config.json")
-        checkpoint_path = hf_hub_download(repo_id=model_name, filename="dia-v0_1.pth")
+        config_path = hf_hub_download(repo_id=model_name, filename=config_path)
+        checkpoint_path = hf_hub_download(repo_id=model_name, filename=checkpoint_path)
         return cls.from_local(config_path, checkpoint_path, compute_dtype, device)
 
     def _load_dac_model(self):
