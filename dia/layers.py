@@ -281,6 +281,7 @@ class EncoderLayer(nn.Module):
         model_config = config.model
         enc_config = config.model.encoder
         embed_dim = enc_config.n_embd
+        self.compute_dtype = compute_dtype
 
         self.pre_sa_norm = RMSNorm(
             embed_dim,
@@ -311,7 +312,8 @@ class EncoderLayer(nn.Module):
         state: EncoderInferenceState,
     ) -> torch.Tensor:
         residual = x
-        x_norm = self.pre_sa_norm(x)
+        x_norm = self.pre_sa_norm(x).to(self.compute_dtype)
+
         sa_out = self.self_attention(
             Xq=x_norm,
             Xkv=x_norm,
@@ -322,7 +324,7 @@ class EncoderLayer(nn.Module):
         x = residual + sa_out
 
         residual = x
-        x_norm = self.post_sa_norm(x)
+        x_norm = self.post_sa_norm(x).to(self.compute_dtype)
         mlp_out = self.mlp(x_norm)
         x = residual + mlp_out
 
@@ -337,6 +339,7 @@ class Encoder(nn.Module):
         self.config = config
         model_config = config.model
         enc_config = config.model.encoder
+        self.compute_dtype = compute_dtype
 
         self.embedding = nn.Embedding(
             model_config.src_vocab_size,
@@ -360,7 +363,7 @@ class Encoder(nn.Module):
         for layer in self.layers:
             x = layer(x, state)
 
-        x = self.norm(x)
+        x = self.norm(x).to(self.compute_dtype)
         return x
 
 
@@ -375,6 +378,7 @@ class DecoderLayer(nn.Module):
         enc_config = config.model.encoder
         dec_embed_dim = dec_config.n_embd
         enc_embed_dim = enc_config.n_embd
+        self.compute_dtype = compute_dtype
 
         # Norms
         self.pre_sa_norm = RMSNorm(
@@ -433,7 +437,7 @@ class DecoderLayer(nn.Module):
         prefill: bool = False,
     ) -> torch.Tensor:
         residual = x
-        x_norm = self.pre_sa_norm(x)
+        x_norm = self.pre_sa_norm(x).to(self.compute_dtype)
 
         sa_out = self.self_attention(
             Xq=x_norm,  # (2, 1, D)
@@ -449,7 +453,7 @@ class DecoderLayer(nn.Module):
         x = residual + sa_out
 
         residual = x
-        x_norm = self.pre_ca_norm(x)
+        x_norm = self.pre_ca_norm(x).to(self.compute_dtype)
         ca_out = self.cross_attention(
             Xq=x_norm,
             Xkv=state.enc_out,
@@ -461,7 +465,7 @@ class DecoderLayer(nn.Module):
         x = residual + ca_out
 
         residual = x
-        x_norm = self.pre_mlp_norm(x)
+        x_norm = self.pre_mlp_norm(x).to(self.compute_dtype)
         mlp_out = self.mlp(x_norm)
         x = residual + mlp_out
 
