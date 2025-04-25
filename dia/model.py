@@ -5,7 +5,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Dict
 
 import dac
 import numpy as np
@@ -14,7 +14,6 @@ import torch.backends.mps as mps
 import torchaudio
 from huggingface_hub import hf_hub_download
 import soundfile as sf
-from dac.model import DAC
 
 from .audio import apply_audio_delay, build_delay_indices, build_revert_indices, decode, revert_audio_delay
 from .config import DiaConfig, DataConfig, TrainingConfig, ModelConfig
@@ -86,12 +85,6 @@ class ComputeDtype(str, Enum):
             raise ValueError(f"Unsupported compute dtype: {self}")
 
 
-@dataclass
-class DiaConfig:
-    # ... config fields ...
-    pass
-
-
 class Dia(torch.nn.Module):
     def __init__(self, config: DiaConfig, device: Optional[Union[str, torch.device]] = None):
         super().__init__()
@@ -105,13 +98,19 @@ class Dia(torch.nn.Module):
         else:
             self.device = device
 
-        logging.info(f"Initializing Dia model on device: {self.device}")
+        logging.info(f"Initializing Dia model (version {self.config.version}) on device: {self.device}")
 
-        self.dac = DAC.from_pretrained("descript/descript-audio-codec-44khz")
+        try:
+            dac_model_path = dac.utils.download(model_type="44khz")
+            self.dac = dac.DAC.load(dac_model_path)
+        except Exception as e:
+            raise RuntimeError("Failed to load DAC model") from e
+
         self.dac.to(self.device)
 
-        self.model = DiaModel(config, self.dac.dtype)
-        self.dac_model = None
+        weight_dtype_str = self.config.model.weight_dtype
+        model_dtype = getattr(torch, weight_dtype_str)
+        self.model = DiaModel(self.config, model_dtype)
 
     @classmethod
     def from_pretrained(
@@ -162,13 +161,7 @@ class Dia(torch.nn.Module):
             RuntimeError: If there is an error loading the checkpoint.
         """
         config_dict = json.load(open(config_path))
-        print("--- Loaded config_dict ---")
-        print(config_dict)
-        print("--- End config_dict ---")
-        data_config = DataConfig(**config_dict.pop('data'))
-        training_config = TrainingConfig(**config_dict.pop('training'))
-        model_config = ModelConfig(**config_dict.pop('model'))
-        config = DiaConfig(data=data_config, training=training_config, model=model_config)
+        config = DiaConfig(**config_dict)
 
         model = cls(config, device=device)
 
@@ -182,16 +175,7 @@ class Dia(torch.nn.Module):
 
         model.model.to(model.device)
         model.model.eval()
-        model._load_dac_model()
         return model
-
-    def _load_dac_model(self):
-        try:
-            dac_model_path = dac.utils.download()
-            dac_model = dac.DAC.load(dac_model_path).to(self.device)
-        except Exception as e:
-            raise RuntimeError("Failed to load DAC model") from e
-        self.dac_model = dac_model
 
     def _prepare_text_input(self, text: str) -> torch.Tensor:
         """Encodes text prompt, pads, and creates attention mask and positions."""
@@ -260,6 +244,12 @@ class Dia(torch.nn.Module):
         return prefill, prefill_step
 
     def _prepare_generation(self, text: str, audio_prompt: str | torch.Tensor | None, verbose: bool):
+        # 디버깅 출력 추가
+        print(f"--- Inside _prepare_generation ---")
+        print(f"Type of self.config: {type(self.config)}")
+        print(f"Content of self.config (or keys): {self.config if isinstance(self.config, dict) else vars(self.config).keys()}")
+        print(f"--- End Debug Print ---")
+
         enc_input_cond = self._prepare_text_input(text)
         enc_input_uncond = torch.zeros_like(enc_input_cond)
         enc_input = torch.cat([enc_input_uncond, enc_input_cond], dim=0)
@@ -276,7 +266,7 @@ class Dia(torch.nn.Module):
 
         dec_cross_attn_cache = self.model.decoder.precompute_cross_attn_cache(encoder_out, enc_state.positions)
         dec_state = DecoderInferenceState.new(
-            self.config, enc_state, encoder_out, dec_cross_attn_cache, self.dac.dtype
+            self.config, enc_state, encoder_out, dec_cross_attn_cache, self.dac.parameters().__next__().dtype
         )
         dec_output = DecoderOutput.new(self.config, self.device)
         dec_output.prefill(prefill, prefill_step)
@@ -343,7 +333,7 @@ class Dia(torch.nn.Module):
         invalid_mask = (codebook < min_valid_index) | (codebook > max_valid_index)
         codebook[invalid_mask] = 0
 
-        audio = decode(self.dac_model, codebook.transpose(1, 2))
+        audio = decode(self.dac, codebook.transpose(1, 2))
 
         return audio.squeeze().cpu().numpy()
 
@@ -352,8 +342,8 @@ class Dia(torch.nn.Module):
         if sr != DEFAULT_SAMPLE_RATE:
             audio = torchaudio.functional.resample(audio, sr, DEFAULT_SAMPLE_RATE)
         audio = audio.to(self.device).unsqueeze(0)  # 1, C, T
-        audio_data = self.dac_model.preprocess(audio, DEFAULT_SAMPLE_RATE)
-        _, encoded_frame, _, _, _ = self.dac_model.encode(audio_data)  # 1, C, T
+        audio_data = self.dac.preprocess(audio, DEFAULT_SAMPLE_RATE)
+        _, encoded_frame, _, _, _ = self.dac.encode(audio_data)  # 1, C, T
         return encoded_frame.squeeze(0).transpose(0, 1)
 
     def save_audio(self, path: str, audio: np.ndarray):

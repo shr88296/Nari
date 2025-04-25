@@ -42,8 +42,6 @@ class DataConfig(BaseModel, frozen=True):
     audio_bos_value: int = Field(default=1026)
     delay_pattern: list[Annotated[int, Field(ge=0)]] = Field(default_factory=lambda: [0, 8, 9, 10, 11, 12, 13, 14, 15])
 
-    model_config = ConfigDict(extra='allow')
-
     def __hash__(self) -> int:
         """Generate a hash based on all fields of the config."""
         return hash(
