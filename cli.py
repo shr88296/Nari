@@ -1,22 +1,28 @@
 import argparse
 import os
 import random
+import sys
+import time
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 import torch
+import torch.backends.mps as mps
 
 from dia.model import Dia
 
 
-def set_seed(seed: int):
+def set_seed(seed: int, device: torch.device):
     """Sets the random seed for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+    # Set CUDA seeds only if CUDA device is used
+    if device.type == 'cuda':
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
     # Ensure deterministic behavior for cuDNN (if used)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
@@ -67,11 +73,19 @@ def main():
 
     infra_group = parser.add_argument_group("Infrastructure")
     infra_group.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
-    infra_group.add_argument(
+
+    # Determine default device dynamically
+    default_device = "cpu"
+    if torch.cuda.is_available():
+        default_device = "cuda"
+    elif mps.is_available():
+        default_device = "mps"
+
+    parser.add_argument(
         "--device",
         type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device to run inference on (e.g., 'cuda', 'cpu', default: auto).",
+        default=default_device,
+        help=f"Device to run inference on (e.g., 'cuda', 'mps', 'cpu', default: {default_device}).",
     )
 
     args = parser.parse_args()
@@ -89,7 +103,7 @@ def main():
 
     # Set seed if provided
     if args.seed is not None:
-        set_seed(args.seed)
+        set_seed(args.seed, torch.device(args.device))
         print(f"Using random seed: {args.seed}")
 
     # Determine device

@@ -1,14 +1,23 @@
 import time
 from enum import Enum
+import json
+import logging
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Union
 
 import dac
 import numpy as np
 import torch
+import torch.backends.mps as mps
 import torchaudio
 from huggingface_hub import hf_hub_download
+import soundfile as sf
+from dac.model import DAC
 
 from .audio import apply_audio_delay, build_delay_indices, build_revert_indices, decode, revert_audio_delay
-from .config import DiaConfig
+from .config import DiaConfig, DataConfig, TrainingConfig, ModelConfig
 from .layers import DiaModel
 from .state import DecoderInferenceState, DecoderOutput, EncoderInferenceState
 
@@ -16,12 +25,13 @@ from .state import DecoderInferenceState, DecoderOutput, EncoderInferenceState
 DEFAULT_SAMPLE_RATE = 44100
 
 
-def _get_default_device():
+def _get_default_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    elif mps.is_available():
         return torch.device("mps")
-    return torch.device("cpu")
+    else:
+        return torch.device("cpu")
 
 
 def _sample_next_token(
@@ -76,78 +86,39 @@ class ComputeDtype(str, Enum):
             raise ValueError(f"Unsupported compute dtype: {self}")
 
 
-class Dia:
-    def __init__(
-        self,
-        config: DiaConfig,
-        compute_dtype: str | ComputeDtype = ComputeDtype.FLOAT32,
-        device: torch.device | None = None,
-    ):
-        """Initializes the Dia model.
+@dataclass
+class DiaConfig:
+    # ... config fields ...
+    pass
 
-        Args:
-            config: The configuration object for the model.
-            device: The device to load the model onto. If None, will automatically select the best available device.
 
-        Raises:
-            RuntimeError: If there is an error loading the DAC model.
-        """
+class Dia(torch.nn.Module):
+    def __init__(self, config: DiaConfig, device: Optional[Union[str, torch.device]] = None):
         super().__init__()
         self.config = config
-        self.device = device if device is not None else _get_default_device()
-        if isinstance(compute_dtype, str):
-            compute_dtype = ComputeDtype(compute_dtype)
-        self.compute_dtype = compute_dtype.to_dtype()
-        self.model = DiaModel(config, self.compute_dtype)
+
+        if device is None:
+            self.device = torch.device("cpu")
+            logging.warning("Device not specified, defaulting to CPU. This may be slow.")
+        elif isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
+
+        logging.info(f"Initializing Dia model on device: {self.device}")
+
+        self.dac = DAC.from_pretrained("descript/descript-audio-codec-44khz")
+        self.dac.to(self.device)
+
+        self.model = DiaModel(config, self.dac.dtype)
         self.dac_model = None
-
-    @classmethod
-    def from_local(
-        cls,
-        config_path: str,
-        checkpoint_path: str,
-        compute_dtype: str | ComputeDtype = ComputeDtype.FLOAT32,
-        device: torch.device | None = None,
-    ) -> "Dia":
-        """Loads the Dia model from local configuration and checkpoint files.
-
-        Args:
-            config_path: Path to the configuration JSON file.
-            checkpoint_path: Path to the model checkpoint (.pth) file.
-            device: The device to load the model onto. If None, will automatically select the best available device.
-
-        Returns:
-            An instance of the Dia model loaded with weights and set to eval mode.
-
-        Raises:
-            FileNotFoundError: If the config or checkpoint file is not found.
-            RuntimeError: If there is an error loading the checkpoint.
-        """
-        config = DiaConfig.load(config_path)
-        if config is None:
-            raise FileNotFoundError(f"Config file not found at {config_path}")
-
-        dia = cls(config, compute_dtype, device)
-
-        try:
-            state_dict = torch.load(checkpoint_path, map_location=dia.device)
-            dia.model.load_state_dict(state_dict)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}")
-        except Exception as e:
-            raise RuntimeError(f"Error loading checkpoint from {checkpoint_path}") from e
-
-        dia.model.to(dia.device)
-        dia.model.eval()
-        dia._load_dac_model()
-        return dia
 
     @classmethod
     def from_pretrained(
         cls,
         model_name: str = "nari-labs/Dia-1.6B",
         compute_dtype: str | ComputeDtype = ComputeDtype.FLOAT32,
-        device: torch.device | None = None,
+        device: Optional[Union[str, torch.device]] = None,
     ) -> "Dia":
         """Loads the Dia model from a Hugging Face Hub repository.
 
@@ -167,7 +138,52 @@ class Dia:
         """
         config_path = hf_hub_download(repo_id=model_name, filename="config.json")
         checkpoint_path = hf_hub_download(repo_id=model_name, filename="dia-v0_1.pth")
-        return cls.from_local(config_path, checkpoint_path, compute_dtype, device)
+        return cls.from_local(config_path, checkpoint_path, device)
+
+    @classmethod
+    def from_local(
+        cls,
+        config_path: Union[str, Path],
+        checkpoint_path: Union[str, Path],
+        device: Optional[Union[str, torch.device]] = None,
+    ) -> "Dia":
+        """Loads the Dia model from local configuration and checkpoint files.
+
+        Args:
+            config_path: Path to the configuration JSON file.
+            checkpoint_path: Path to the model checkpoint (.pth) file.
+            device: The device to load the model onto. If None, will automatically select the best available device.
+
+        Returns:
+            An instance of the Dia model loaded with weights and set to eval mode.
+
+        Raises:
+            FileNotFoundError: If the config or checkpoint file is not found.
+            RuntimeError: If there is an error loading the checkpoint.
+        """
+        config_dict = json.load(open(config_path))
+        print("--- Loaded config_dict ---")
+        print(config_dict)
+        print("--- End config_dict ---")
+        data_config = DataConfig(**config_dict.pop('data'))
+        training_config = TrainingConfig(**config_dict.pop('training'))
+        model_config = ModelConfig(**config_dict.pop('model'))
+        config = DiaConfig(data=data_config, training=training_config, model=model_config)
+
+        model = cls(config, device=device)
+
+        try:
+            state_dict = torch.load(checkpoint_path, map_location=model.device)
+            model.model.load_state_dict(state_dict)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}")
+        except Exception as e:
+            raise RuntimeError(f"Error loading checkpoint from {checkpoint_path}") from e
+
+        model.model.to(model.device)
+        model.model.eval()
+        model._load_dac_model()
+        return model
 
     def _load_dac_model(self):
         try:
@@ -260,7 +276,7 @@ class Dia:
 
         dec_cross_attn_cache = self.model.decoder.precompute_cross_attn_cache(encoder_out, enc_state.positions)
         dec_state = DecoderInferenceState.new(
-            self.config, enc_state, encoder_out, dec_cross_attn_cache, self.compute_dtype
+            self.config, enc_state, encoder_out, dec_cross_attn_cache, self.dac.dtype
         )
         dec_output = DecoderOutput.new(self.config, self.device)
         dec_output.prefill(prefill, prefill_step)
@@ -341,8 +357,6 @@ class Dia:
         return encoded_frame.squeeze(0).transpose(0, 1)
 
     def save_audio(self, path: str, audio: np.ndarray):
-        import soundfile as sf
-
         sf.write(path, audio, DEFAULT_SAMPLE_RATE)
 
     @torch.inference_mode()
