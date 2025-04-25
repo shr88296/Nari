@@ -14,9 +14,9 @@ Key components:
 """
 
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, Field, ConfigDict
 
 
 class DataConfig(BaseModel, frozen=True):

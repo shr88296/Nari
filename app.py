@@ -8,6 +8,7 @@ import gradio as gr
 import numpy as np
 import soundfile as sf
 import torch
+import torch.backends.mps as mps
 
 from dia.model import Dia
 
@@ -25,9 +26,7 @@ if args.device:
     device = torch.device(args.device)
 elif torch.cuda.is_available():
     device = torch.device("cuda")
-# Simplified MPS check for broader compatibility
-elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-    # Basic check is usually sufficient, detailed check can be problematic
+elif mps.is_available():
     device = torch.device("mps")
 else:
     device = torch.device("cpu")
