@@ -52,7 +52,6 @@ uv run app.py
 
 ---
 
-Let me know if you want a version for Windows (`activate` vs `source`) or if you'd like to use `conda` throughout instead of `venv`.
 Note that the model was not fine-tuned on a specific voice. Hence, you will get different voices every time you run the model.
 You can keep speaker consistency by either adding an audio prompt (a guide coming VERY soon - try it with the second example on Gradio for now), or fixing the seed.
 
