@@ -79,7 +79,7 @@ def run_inference(
     with contextlib.redirect_stdout(console_output_buffer):
         # Prepend transcript text if provided
         if audio_prompt_text_input and not audio_prompt_text_input.isspace():
-            text_input = audio_prompt_text_input.strip() + " " + text_input.strip()
+            text_input = audio_prompt_text_input.strip() + "\n" + text_input.strip()
 
         if not text_input or text_input.isspace():
             raise gr.Error("Text input cannot be empty.")
@@ -88,7 +88,7 @@ def run_inference(
         temp_audio_prompt_path = None
         output_audio = (44100, np.zeros(1, dtype=np.float32))
 
-        # Set and Display Seed
+        # Set and Display Generation Seed
         if seed is None or seed < 0:
             seed = random.randint(0, 2**32 - 1)
             print(f"No seed provided, generated random seed: {seed}")
@@ -267,13 +267,13 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                     type="numpy",
                 )
                 audio_prompt_text_input = gr.Textbox(
-                    label="Input Transcript of Audio Prompt (Optional)",
+                    label="Transcript of Audio Prompt (Required if using Audio Prompt)",
                     placeholder="Enter text here...",
                     value="",
                     lines=5,  # Increased lines
                 )
             text_input = gr.Textbox(
-                label="Input Text To Generate",
+                label="Text To Generate",
                 placeholder="Enter text here...",
                 value=default_text,
                 lines=5,  # Increased lines
@@ -328,12 +328,12 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                     info="Adjusts the speed of the generated audio (1.0 = original speed).",
                 )
                 seed_input = gr.Number(
-                    label="Random Seed (Optional)",
+                    label="Generation Seed (Optional)",
                     value=-1,
                     precision=0,  # No decimal points
                     step=1,
                     interactive=True,
-                    info="Set a random seed for reproducible outputs. Leave empty or -1 for random behavior.",
+                    info="Set a generation seed for reproducible outputs. Leave empty or -1 for random seed.",
                 )
 
             run_button = gr.Button("Generate Audio", variant="primary")
@@ -345,7 +345,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 autoplay=False,
             )
             seed_output = gr.Textbox(
-                label="Actual Random Seed Used",
+                label="Generation Seed",
                 interactive=False
             )
             console_output = gr.Textbox(
