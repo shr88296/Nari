@@ -154,7 +154,8 @@ class Dia:
         repository ID and then loads the model.
 
         Args:
-            model_name: The Hugging Face Hub repository ID (e.g., "NariLabs/Dia-1.6B").
+            model_name: The Hugging Face Hub repository ID (e.g., "nari-labs/Dia-1.6B").
+            compute_dtype: The computation dtype to use.
             device: The device to load the model onto. If None, will automatically select the best available device.
 
         Returns:
