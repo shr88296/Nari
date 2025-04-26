@@ -1,6 +1,7 @@
 import argparse
 import tempfile
 import time
+import random
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -43,6 +44,16 @@ except Exception as e:
     print(f"Error loading Nari model: {e}")
     raise
 
+def set_seed(seed: int):
+    """Sets the random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def run_inference(
     text_input: str,
@@ -53,6 +64,7 @@ def run_inference(
     top_p: float,
     cfg_filter_top_k: int,
     speed_factor: float,
+    seed: Optional[int] = None,
 ):
     """
     Runs Nari inference using the globally loaded model and provided inputs.
@@ -66,6 +78,13 @@ def run_inference(
     temp_txt_file_path = None
     temp_audio_prompt_path = None
     output_audio = (44100, np.zeros(1, dtype=np.float32))
+
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+        print(f"No seed provided, generated random seed: {seed}")
+    else:
+        print(f"Using user-selected seed: {seed}")
+    set_seed(seed)
 
     try:
         prompt_path_for_generate = None
@@ -288,6 +307,14 @@ with gr.Blocks(css=css) as demo:
                     step=0.02,
                     info="Adjusts the speed of the generated audio (1.0 = original speed).",
                 )
+                seed_input = gr.Number(
+                    label="Random Seed (Optional)",
+                    value=None,
+                    precision=0,  # No decimal points
+                    step=1,
+                    interactive=True,
+                    info="Set a random seed for reproducible outputs. Leave empty for random behavior.",
+                )
 
             run_button = gr.Button("Generate Audio", variant="primary")
 
@@ -310,6 +337,7 @@ with gr.Blocks(css=css) as demo:
             top_p,
             cfg_filter_top_k,
             speed_factor_slider,
+            seed_input,
         ],
         outputs=[audio_output],  # Add status_output here if using it
         api_name="generate_audio",
@@ -352,6 +380,7 @@ with gr.Blocks(css=css) as demo:
                 top_p,
                 cfg_filter_top_k,
                 speed_factor_slider,
+                seed_input,
             ],
             outputs=[audio_output],
             fn=run_inference,
