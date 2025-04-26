@@ -79,7 +79,8 @@ def run_inference(
     temp_audio_prompt_path = None
     output_audio = (44100, np.zeros(1, dtype=np.float32))
 
-    if seed is None:
+    # Set and Display Seed
+    if seed is None or seed < 0:
         seed = random.randint(0, 2**32 - 1)
         print(f"No seed provided, generated random seed: {seed}")
     else:
@@ -221,7 +222,7 @@ def run_inference(
             except OSError as e:
                 print(f"Warning: Error deleting temporary audio prompt file {temp_audio_prompt_path}: {e}")
 
-    return output_audio
+    return output_audio, seed, console_output
 
 
 # --- Create Gradio Interface ---
@@ -247,9 +248,15 @@ with gr.Blocks(css=css) as demo:
     with gr.Row(equal_height=False):
         with gr.Column(scale=1):
             text_input = gr.Textbox(
-                label="Input Text",
+                label="Input Text To Generate",
                 placeholder="Enter text here...",
                 value=default_text,
+                lines=5,  # Increased lines
+            )
+            audio_prompt_text_input = gr.Textbox(
+                label="Input Transcript of Audio Prompt (Optional)",
+                placeholder="Enter text here...",
+                value="",
                 lines=5,  # Increased lines
             )
             audio_prompt_input = gr.Audio(
@@ -309,11 +316,11 @@ with gr.Blocks(css=css) as demo:
                 )
                 seed_input = gr.Number(
                     label="Random Seed (Optional)",
-                    value=None,
+                    value=-1,
                     precision=0,  # No decimal points
                     step=1,
                     interactive=True,
-                    info="Set a random seed for reproducible outputs. Leave empty for random behavior.",
+                    info="Set a random seed for reproducible outputs. Leave empty or -1 for random behavior.",
                 )
 
             run_button = gr.Button("Generate Audio", variant="primary")
@@ -323,6 +330,13 @@ with gr.Blocks(css=css) as demo:
                 label="Generated Audio",
                 type="numpy",
                 autoplay=False,
+            )
+            seed_output = gr.Textbox(
+                label="Actual Random Seed Used",
+                interactive=False
+            )
+            console_output = gr.Textbox(
+                label="Console Output Log", lines=10, interactive=False
             )
 
     # Link button click to function
@@ -339,7 +353,11 @@ with gr.Blocks(css=css) as demo:
             speed_factor_slider,
             seed_input,
         ],
-        outputs=[audio_output],  # Add status_output here if using it
+        outputs=[
+            audio_output,
+            seed_output,
+            console_output,
+                 ],  # Add status_output here if using it
         api_name="generate_audio",
     )
 
