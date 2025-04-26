@@ -5,8 +5,6 @@ from huggingface_hub import PyTorchModelHubMixin
 from torch import Tensor
 from torch.nn import RMSNorm
 
-from huggingface_hub import PyTorchModelHubMixin
-
 from .config import DiaConfig
 from .state import DecoderInferenceState, EncoderInferenceState, KVCache
 
