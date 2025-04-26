@@ -254,12 +254,12 @@ if example_txt_path.exists():
 
 
 # Build Gradio UI
-with gr.Blocks(css=css) as demo:
+with gr.Blocks(css=css, theme="gradio/dark") as demo:
     gr.Markdown("# Nari Text-to-Speech Synthesis")
 
     with gr.Row(equal_height=False):
         with gr.Column(scale=1):
-            with gr.Accordion("Generation Parameters", open=False):
+            with gr.Accordion("Audio Reference Prompt (Optional)", open=False):
                 audio_prompt_input = gr.Audio(
                     label="Audio Prompt (Optional)",
                     show_label=True,
@@ -357,6 +357,7 @@ with gr.Blocks(css=css) as demo:
         fn=run_inference,
         inputs=[
             text_input,
+            audio_prompt_text_input,
             audio_prompt_input,
             max_new_tokens,
             cfg_scale,
