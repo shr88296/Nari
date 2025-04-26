@@ -19,7 +19,11 @@ def _get_default_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
+        try:
+            _ = torch.ones(1).to("mps")
+            return torch.device("mps")
+        except Exception:
+            print("Warning: MPS device found but not usable, falling back to CPU.")
     return torch.device("cpu")
 
 
@@ -181,8 +185,12 @@ class Dia:
         try:
             dac_model_path = dac.utils.download()
             dac_model = dac.DAC.load(dac_model_path).to(self.device)
+        except ImportError:
+            raise ImportError(
+                "descript-audio-codec is not installed. Install with: pip install descript-audio-codec>=1.0.0"
+            )
         except Exception as e:
-            raise RuntimeError("Failed to load DAC model") from e
+            raise RuntimeError(f"Failed to load DAC model: {e}") from e
         self.dac_model = dac_model
 
     def _prepare_text_input(self, text: str) -> torch.Tensor:
