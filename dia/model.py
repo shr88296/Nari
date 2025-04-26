@@ -1,3 +1,4 @@
+from calendar import month_name
 import time
 from enum import Enum
 
@@ -165,9 +166,17 @@ class Dia:
             FileNotFoundError: If config or checkpoint download/loading fails.
             RuntimeError: If there is an error loading the checkpoint.
         """
-        config_path = hf_hub_download(repo_id=model_name, filename="config.json")
-        checkpoint_path = hf_hub_download(repo_id=model_name, filename="dia-v0_1.pth")
-        return cls.from_local(config_path, checkpoint_path, compute_dtype, device)
+        if isinstance(compute_dtype, str):
+            compute_dtype = ComputeDtype(compute_dtype)
+        loaded_model = DiaModel.from_pretrained(model_name, compute_dtype=compute_dtype.to_dtype())
+        config = loaded_model.config
+        dia = cls(config, compute_dtype, device)
+
+        dia.model = loaded_model
+        dia.model.to(dia.device)
+        dia.model.eval()
+        dia._load_dac_model()
+        return dia
 
     def _load_dac_model(self):
         try:
