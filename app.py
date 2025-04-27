@@ -155,7 +155,7 @@ def run_inference(
             set_seed(seed)
 
             # Run Generation
-            print(f"Generating speech: {text_input}")
+            print(f"Generating speech: \"\n{text_input}\"\n")
 
             start_time = time.time()
 
