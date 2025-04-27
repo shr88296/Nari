@@ -79,7 +79,8 @@ def run_inference(
     with contextlib.redirect_stdout(console_output_buffer):
         # Prepend transcript text if audio_prompt provided
         if audio_prompt_input and audio_prompt_text_input and not audio_prompt_text_input.isspace():
-            text_input = audio_prompt_text_input.strip() + "\n" + text_input.strip()
+            text_input = audio_prompt_text_input + "\n" + text_input
+            text_input = text_input.strip()
 
         if audio_prompt_input and (not audio_prompt_text_input or audio_prompt_text_input.isspace()):
             raise gr.Error("Audio Prompt Text input cannot be empty.")
@@ -87,17 +88,11 @@ def run_inference(
         if not text_input or text_input.isspace():
             raise gr.Error("Text input cannot be empty.")
 
+
+        # Preprocess Audio
         temp_txt_file_path = None
         temp_audio_prompt_path = None
         output_audio = (44100, np.zeros(1, dtype=np.float32))
-
-        # Set and Display Generation Seed
-        if seed is None or seed < 0:
-            seed = random.randint(0, 2**32 - 1)
-            print(f"No seed provided, generated random seed: {seed}")
-        else:
-            print(f"Using user-selected seed: {seed}")
-        set_seed(seed)
 
         try:
             prompt_path_for_generate = None
@@ -150,7 +145,17 @@ def run_inference(
                             print(f"Error writing temporary audio file: {write_e}")
                             raise gr.Error(f"Failed to save audio prompt: {write_e}")
 
-            # 3. Run Generation
+
+            # Set and Display Generation Seed
+            if seed is None or seed < 0:
+                seed = random.randint(0, 2 ** 32 - 1)
+                print(f"No seed provided, generated random seed: {seed}")
+            else:
+                print(f"Using user-selected seed: {seed}")
+            set_seed(seed)
+
+            # Run Generation
+            print(f"Generating speech: {text_input}")
 
             start_time = time.time()
 
@@ -220,7 +225,7 @@ def run_inference(
             raise gr.Error(f"Inference failed: {e}")
 
         finally:
-            # 5. Cleanup Temporary Files defensively
+            # Cleanup Temporary Files defensively
             if temp_txt_file_path and Path(temp_txt_file_path).exists():
                 try:
                     Path(temp_txt_file_path).unlink()
