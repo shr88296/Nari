@@ -25,16 +25,12 @@ We also provide a [demo page](https://yummy-fir-7a4.notion.site/dia) comparing o
 - Join our [discord server](https://discord.gg/yBrqQ9Dd) for community support and access to new features.
 - Play with a larger version of Dia: generate fun conversations, remix content, and share with friends. 🔮 Join the [waitlist](https://tally.so/r/meokbo) for early access.
 
-## ⚡️ Quickstart
-
-### Install via pip
-
-```bash
-# Install directly from GitHub
-pip install git+https://github.com/nari-labs/dia.git
-```
-
-### Run the Gradio UI
+### ⚡️ Quickstart  
+> **📝 Tip:** It's recommended to create a Conda environment first and activate it before proceeding:
+> ```bash
+> conda create -n dia-env python=3.10 -y
+> conda activate dia-env
+> ```
 
 This will open a Gradio UI that you can work on.
 
@@ -43,16 +39,18 @@ git clone https://github.com/nari-labs/dia.git
 cd dia && uv run app.py
 ```
 
-or if you do not have `uv` pre-installed:
+Or if you do not have `uv` pre-installed:
 
 ```bash
 git clone https://github.com/nari-labs/dia.git
 cd dia
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
-python app.py
+pip install uv
+uv run app.py
 ```
+
+---
 
 Note that the model was not fine-tuned on a specific voice. Hence, you will get different voices every time you run the model.
 You can keep speaker consistency by either adding an audio prompt (a guide coming VERY soon - try it with the second example on Gradio for now), or fixing the seed.
