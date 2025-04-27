@@ -149,13 +149,13 @@ def run_inference(
             # Set and Display Generation Seed
             if seed is None or seed < 0:
                 seed = random.randint(0, 2 ** 32 - 1)
-                print(f"No seed provided, generated random seed: {seed}")
+                print(f"\nNo seed provided, generated random seed: {seed}\n")
             else:
-                print(f"Using user-selected seed: {seed}")
+                print(f"\nUsing user-selected seed: {seed}\n")
             set_seed(seed)
 
             # Run Generation
-            print(f"Generating speech: \"\n{text_input}\"\n")
+            print(f"Generating speech: \n\"{text_input}\"\n")
 
             start_time = time.time()
 
@@ -173,7 +173,7 @@ def run_inference(
                 )
 
             end_time = time.time()
-            print(f"Generation finished in {end_time - start_time:.2f} seconds.")
+            print(f"Generation finished in {end_time - start_time:.2f} seconds.\n")
 
             # 4. Convert Codes to Audio
             if output_audio_np is not None:
