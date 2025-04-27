@@ -77,9 +77,12 @@ def run_inference(
     console_output_buffer = io.StringIO()
 
     with contextlib.redirect_stdout(console_output_buffer):
-        # Prepend transcript text if provided
-        if audio_prompt_text_input and not audio_prompt_text_input.isspace():
-            text_input = audio_prompt_text_input.strip() + " " + text_input.strip()
+        # Prepend transcript text if audio_prompt provided
+        if audio_prompt_input and audio_prompt_text_input and not audio_prompt_text_input.isspace():
+            text_input = audio_prompt_text_input.strip() + "\n" + text_input.strip()
+
+        if audio_prompt_input and (not audio_prompt_text_input or audio_prompt_text_input.isspace()):
+            raise gr.Error("Audio Prompt Text input cannot be empty.")
 
         if not text_input or text_input.isspace():
             raise gr.Error("Text input cannot be empty.")
