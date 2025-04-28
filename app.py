@@ -42,18 +42,24 @@ print("Loading Nari model...")
 try:
     # Use the function from inference.py
     model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
-    model.eval()
+    # Step 2: Access the underlying torch.nn.Module
+    torch_model = model.model
 
-    # Step 2: Convert to float32 for quantization
-    model = model.to(dtype=torch.float32)
+    # Step 3: Cast to float32 for quantization
+    torch_model = torch_model.to(dtype=torch.float32)
+    torch_model.eval()
 
-    # Step 3: Dynamic quantization
+    # Step 4: Dynamic Quantization
     quantized_model = torch.quantization.quantize_dynamic(
-        model,
+        torch_model,
         {torch.nn.Linear, torch.nn.LSTM},
         dtype=torch.qint8
     )
+
+    # Step 5: Save quantized weights
     torch.save(quantized_model.state_dict(), "quantized_dia_1.6B_int8.bin")
+
+    print("✅ Quantized model saved successfully as quantized_dia_1.6B_int8.bin")
 
 except Exception as e:
     print(f"Error loading Nari model: {e}")
