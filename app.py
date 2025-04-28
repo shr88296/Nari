@@ -57,7 +57,7 @@ def set_seed(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def split_lines_greedy(lines, chunk_size=4):
+def split_lines_greedy(lines, chunk_size):
     """Greedily split lines into chunks of up to chunk_size lines."""
     chunks = []
     i = 0
@@ -81,6 +81,7 @@ def run_inference(
     top_p: float,
     cfg_filter_top_k: int,
     speed_factor: float,
+    chunk_size: int,
     seed: Optional[int] = None,
 ):
     """
@@ -139,7 +140,7 @@ def run_inference(
 
             # --- Chunking ---
             lines = [line.strip() for line in text_input.splitlines() if line.strip()]
-            chunks = split_lines_greedy(lines, chunk_size=4)
+            chunks = split_lines_greedy(lines, chunk_size=chunk_size)
 
             print(f"Chunked into {len(chunks)} chunks.")
 
@@ -154,7 +155,7 @@ def run_inference(
                     chunk_input = chunk.strip()
 
                 num_lines = chunk_input.count("\n") + 1
-                scaling_factor = num_lines / 4.0
+                scaling_factor = num_lines / chunk_size
                 adjusted_tokens = int(max_new_tokens * scaling_factor)
                 adjusted_tokens = max(256, adjusted_tokens)  # Never go lower than 256
 
@@ -281,6 +282,14 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 lines=5,  # Increased lines
             )
             with gr.Accordion("Generation Parameters", open=False):
+                chunk_size = gr.Number(
+                    label="# of Lines per Generation",
+                    minimum=1,
+                    value=3,
+                    precision=0,  # No decimal points
+                    step=1,
+                    info="Sets the number of lines to generate at a time.",
+                )
                 max_new_tokens = gr.Slider(
                     label="Max New Tokens (Audio Length)",
                     minimum=860,
@@ -368,6 +377,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
             cfg_filter_top_k,
             speed_factor_slider,
             seed_input,
+            chunk_size,
         ],
         outputs=[
             audio_output,
@@ -380,26 +390,30 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
     # Add examples (ensure the prompt path is correct or remove it if example file doesn't exist)
     example_prompt_path = "./example_prompt.mp3"  # Adjust if needed
     examples_list = [
-        [
-            "[S1] Oh fire! Oh my goodness! What's the procedure? What to we do people? The smoke could be coming through an air duct! \n[S2] Oh my god! Okay.. it's happening. Everybody stay calm! \n[S1] What's the procedure... \n[S2] Everybody stay fucking calm!!!... Everybody fucking calm down!!!!! \n[S1] No! No! If you touch the handle, if its hot there might be a fire down the hallway! ",
-            None,
-            3072,
-            3.0,
-            1.3,
-            0.95,
-            35,
-            0.94,
-        ],
-        [
-            "[S1] Open weights text to dialogue model. \n[S2] You get full control over scripts and voices. \n[S1] I'm biased, but I think we clearly won. \n[S2] Hard to disagree. (laughs) \n[S1] Thanks for listening to this demo. \n[S2] Try it now on Git hub and Hugging Face. \n[S1] If you liked our model, please give us a star and share to your friends. \n[S2] This was Nari Labs.",
-            example_prompt_path if Path(example_prompt_path).exists() else None,
-            3072,
-            3.0,
-            1.3,
-            0.95,
-            35,
-            0.94,
-        ],
+        {
+            "text_input": "[S1] Oh fire! Oh my goodness!...",
+            "audio_prompt_input": None,
+            "max_new_tokens": 3072,
+            "cfg_scale": 3.0,
+            "temperature": 1.3,
+            "top_p": 0.95,
+            "cfg_filter_top_k": 35,
+            "speed_factor_slider": 0.94,
+            "seed_input": -1,
+            "chunk_size": 4,
+        },
+        {
+            "text_input": "[S1] Open weights text to dialogue model...",
+            "audio_prompt_input": example_prompt_path if Path(example_prompt_path).exists() else None,
+            "max_new_tokens": 3072,
+            "cfg_scale": 3.0,
+            "temperature": 1.3,
+            "top_p": 0.95,
+            "cfg_filter_top_k": 35,
+            "speed_factor_slider": 0.94,
+            "seed_input": -1,
+            "chunk_size": 4,
+        },
     ]
 
     if examples_list:
@@ -415,8 +429,13 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 cfg_filter_top_k,
                 speed_factor_slider,
                 seed_input,
+                chunk_size,
             ],
-            outputs=[audio_output],
+            outputs=[
+                audio_output,
+                seed_output,
+                console_output,
+            ],
             fn=run_inference,
             cache_examples=False,
             label="Examples (Click to Run)",
