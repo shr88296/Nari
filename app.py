@@ -175,6 +175,13 @@ def run_inference(
                 if generated_chunk_audio is not None:
                     audio_segments.append(generated_chunk_audio)
 
+                    # Add a small silence buffer between chunks
+                    if idx < len(chunks) - 1:  # No pause after the last chunk
+                        silence_duration_sec = 0.2  # 200 milliseconds of silence
+                        silence_samples = int(44100 * silence_duration_sec)
+                        silence = np.zeros(silence_samples, dtype=np.float32)
+                        audio_segments.append(silence)
+
             if not audio_segments:
                 output_audio_np = None
             else:
