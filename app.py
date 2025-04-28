@@ -76,18 +76,32 @@ def run_inference(
     global model, device  # Access global model, config, device
     console_output_buffer = io.StringIO()
 
+    # Set and Display Generation Seed
+    if seed is None or seed < 0:
+        seed = random.randint(0, 2 ** 32 - 1)
+        print(f"\nNo seed provided, generated random seed: {seed}\n")
+    else:
+        print(f"\nUsing user-selected seed: {seed}\n")
+    set_seed(seed)
+
+    # --- Chunk the input by 4 lines each ---
+    lines = [line.strip() for line in text_input.splitlines() if line.strip()]
+
+    # Group into chunks of 4 lines
+    chunk_size = 4
+    chunks = [
+        "\n".join(lines[i:i + chunk_size])
+        for i in range(0, len(lines), chunk_size)
+    ]
+
+    print(f"Chunked input into {len(chunks)} chunks of {chunk_size} lines each.")
+
+    # Prepare to accumulate generated audio
+    audio_segments = []
+
     with contextlib.redirect_stdout(console_output_buffer):
-        # Prepend transcript text if audio_prompt provided
-        if audio_prompt_input and audio_prompt_text_input and not audio_prompt_text_input.isspace():
-            text_input = audio_prompt_text_input + "\n" + text_input
-            text_input = text_input.strip()
-
-        if audio_prompt_input and (not audio_prompt_text_input or audio_prompt_text_input.isspace()):
-            raise gr.Error("Audio Prompt Text input cannot be empty.")
-
         if not text_input or text_input.isspace():
             raise gr.Error("Text input cannot be empty.")
-
 
         # Preprocess Audio
         temp_txt_file_path = None
@@ -145,32 +159,40 @@ def run_inference(
                             print(f"Error writing temporary audio file: {write_e}")
                             raise gr.Error(f"Failed to save audio prompt: {write_e}")
 
-
-            # Set and Display Generation Seed
-            if seed is None or seed < 0:
-                seed = random.randint(0, 2 ** 32 - 1)
-                print(f"\nNo seed provided, generated random seed: {seed}\n")
-            else:
-                print(f"\nUsing user-selected seed: {seed}\n")
-            set_seed(seed)
-
             # Run Generation
-            print(f"Generating speech: \n\"{text_input}\"\n")
-
+            # print(f"Generating speech: \n\"{text_input}\"\n")
             start_time = time.time()
+            for idx, chunk in enumerate(chunks):
+                # Prepend transcript text if audio_prompt provided
+                if audio_prompt_input and audio_prompt_text_input and not audio_prompt_text_input.isspace():
+                    chunk_input = audio_prompt_text_input + "\n" + chunk
+                    chunk_input = chunk_input.strip()
 
-            # Use torch.inference_mode() context manager for the generation call
-            with torch.inference_mode():
-                output_audio_np = model.generate(
-                    text_input,
-                    max_tokens=max_new_tokens,
-                    cfg_scale=cfg_scale,
-                    temperature=temperature,
-                    top_p=top_p,
-                    cfg_filter_top_k=cfg_filter_top_k,  # Pass the value here
-                    use_torch_compile=False,  # Keep False for Gradio stability
-                    audio_prompt=prompt_path_for_generate,
-                )
+                if audio_prompt_input and (not audio_prompt_text_input or audio_prompt_text_input.isspace()):
+                    raise gr.Error("Audio Prompt Text input cannot be empty.")
+                print(f"Generating chunk {idx + 1}/{len(chunks)}:\n{chunk}\n")
+
+
+
+                # Use torch.inference_mode() context manager for the generation call
+                with torch.inference_mode():
+                    generated_chunk_audio = model.generate(
+                        chunk_input,
+                        max_tokens=max_new_tokens,
+                        cfg_scale=cfg_scale,
+                        temperature=temperature,
+                        top_p=top_p,
+                        cfg_filter_top_k=cfg_filter_top_k,  # Pass the value here
+                        use_torch_compile=False,  # Keep False for Gradio stability
+                        audio_prompt=prompt_path_for_generate,
+                    )
+                if generated_chunk_audio is not None:
+                    audio_segments.append(generated_chunk_audio)
+
+                if not audio_segments:
+                    output_audio_np = None
+                else:
+                    output_audio_np = np.concatenate(audio_segments)
 
             end_time = time.time()
             print(f"Generation finished in {end_time - start_time:.2f} seconds.\n")
