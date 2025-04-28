@@ -163,18 +163,15 @@ def run_inference(
             # print(f"Generating speech: \n\"{text_input}\"\n")
             start_time = time.time()
             for idx, chunk in enumerate(chunks):
-                # Prepend transcript text if audio_prompt provided
-                if audio_prompt_input and audio_prompt_text_input and not audio_prompt_text_input.isspace():
-                    chunk_input = audio_prompt_text_input + "\n" + chunk
-                    chunk_input = chunk_input.strip()
+                if audio_prompt_input:
+                    if not audio_prompt_text_input or audio_prompt_text_input.isspace():
+                        raise gr.Error("Audio Prompt Text input cannot be empty.")
+                    chunk_input = (audio_prompt_text_input + "\n" + chunk).strip()
+                else:
+                    chunk_input = chunk.strip()
 
-                if audio_prompt_input and (not audio_prompt_text_input or audio_prompt_text_input.isspace()):
-                    raise gr.Error("Audio Prompt Text input cannot be empty.")
-                print(f"Generating chunk {idx + 1}/{len(chunks)}:\n{chunk}\n")
+                print(f"Generating chunk {idx + 1}/{len(chunks)}:\n{chunk_input}\n")
 
-
-
-                # Use torch.inference_mode() context manager for the generation call
                 with torch.inference_mode():
                     generated_chunk_audio = model.generate(
                         chunk_input,
@@ -182,8 +179,8 @@ def run_inference(
                         cfg_scale=cfg_scale,
                         temperature=temperature,
                         top_p=top_p,
-                        cfg_filter_top_k=cfg_filter_top_k,  # Pass the value here
-                        use_torch_compile=False,  # Keep False for Gradio stability
+                        cfg_filter_top_k=cfg_filter_top_k,
+                        use_torch_compile=False,
                         audio_prompt=prompt_path_for_generate,
                     )
                 if generated_chunk_audio is not None:
