@@ -285,7 +285,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 chunk_size = gr.Number(
                     label="# of Lines per Generation",
                     minimum=1,
-                    value=3,
+                    value=4,
                     precision=0,  # No decimal points
                     step=1,
                     info="Sets the number of lines to generate at a time.",
