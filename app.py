@@ -42,6 +42,19 @@ print("Loading Nari model...")
 try:
     # Use the function from inference.py
     model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
+    model.eval()
+
+    # Step 2: Convert to float32 for quantization
+    model = model.to(dtype=torch.float32)
+
+    # Step 3: Dynamic quantization
+    quantized_model = torch.quantization.quantize_dynamic(
+        model,
+        {torch.nn.Linear, torch.nn.LSTM},
+        dtype=torch.qint8
+    )
+    torch.save(quantized_model.state_dict(), "quantized_dia_1.6B_int8.bin")
+
 except Exception as e:
     print(f"Error loading Nari model: {e}")
     raise
@@ -288,7 +301,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                     value=4,
                     precision=0,  # No decimal points
                     step=1,
-                    info="Sets the number of lines to generate at a time.",
+                    info="Sets the number of lines to generate at a time. (use smaller number for dialogue with longer lines, larger number for dialogue with smaller lines)",
                 )
                 max_new_tokens = gr.Slider(
                     label="Max New Tokens (Audio Length)",
