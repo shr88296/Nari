@@ -313,13 +313,13 @@ def run_inference(
 
         console_output = console_output_buffer.getvalue()
 
-    # try:
-    #     torch.cuda.empty_cache()
-    #     gc.collect()
-    # except:
-    #     print("No cache to clear or garbage to collect")
-    # finally:
-    #     print("Generation completed")
+    try:
+        torch.cuda.empty_cache()
+        gc.collect()
+    except:
+        print("No cache to clear or garbage to collect")
+    finally:
+        print("Generation completed")
 
     return output_audio, seed, console_output
 
