@@ -41,7 +41,7 @@ print(f"Using device: {device}")
 print("Loading Nari model...")
 try:
     # Use the function from inference.py
-    model = Dia.from_pretrained("RobAgrees/quantized-dia-1.6B-int8", compute_dtype="float16", device=device)
+    model = Dia.from_pretrained("RobAgrees/quantized-dia-1.6B-int8", compute_dtype="int8", device=device)
 
 except Exception as e:
     print(f"Error loading Nari model: {e}")
