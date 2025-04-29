@@ -44,9 +44,23 @@ try:
     # Step 1: Load model normally
     model = Dia.from_pretrained(
         "RobAgrees/quantized-dia-1.6B-int8",
-        compute_dtype="qint8",
+        compute_dtype="float16",
         device=device
     )
+
+    # Step 2: Apply dynamic quantization
+    quantized_model = torch.quantization.quantize_dynamic(
+        model.model,
+        {torch.nn.Linear, torch.nn.LSTM},
+        dtype=torch.qint8
+    )
+
+    # Step 3: Dereference the original
+    model.model = None
+    torch.cuda.empty_cache()
+
+    # Step 4: Replace with quantized
+    model.model = quantized_model
 
 except Exception as e:
     print(f"Error loading Nari model: {e}")

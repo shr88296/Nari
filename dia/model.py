@@ -63,7 +63,6 @@ class ComputeDtype(str, Enum):
     FLOAT32 = "float32"
     FLOAT16 = "float16"
     BFLOAT16 = "bfloat16"
-    QINT8 = "qint8"
 
     def to_dtype(self) -> torch.dtype:
         if self == ComputeDtype.FLOAT32:
@@ -72,8 +71,6 @@ class ComputeDtype(str, Enum):
             return torch.float16
         elif self == ComputeDtype.BFLOAT16:
             return torch.bfloat16
-        elif self == ComputeDtype.QINT8:
-            return torch.qint8
         else:
             raise ValueError(f"Unsupported compute dtype: {self}")
 
