@@ -44,7 +44,7 @@ try:
     # Step 1: Load model normally
     model = Dia.from_pretrained(
         "RobAgrees/quantized-dia-1.6B-int8",
-        compute_dtype="float32",
+        compute_dtype="float16",
         device=device
     )
 
@@ -76,6 +76,54 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+def count_effective_length(text):
+    """Counts effective length treating [S1] and [S2] as single characters."""
+    return len(text.replace("[S1]", "¤").replace("[S2]", "¤"))
+
+def auto_adjust_chunk_size(text, user_chunk_size):
+    """Auto-adjusts chunk size if turbo mode is enabled."""
+    effective_chars = count_effective_length(text)
+    if user_chunk_size > 0:
+        # If user explicitly sets a chunk size, respect it
+        return int(user_chunk_size)
+    else:
+        # Auto-tune based on input size
+        if effective_chars <= 1024:
+            return 48
+        elif effective_chars <= 4096:
+            return 64
+        else:
+            return 96
+
+
+def split_by_words_respecting_special_tokens(text, max_effective_chars=64):
+    """Splits text into chunks close to max_effective_chars, preserving full words and [S1]/[S2] markers."""
+    words = text.split()
+    chunks = []
+    current_chunk = ""
+
+    for word in words:
+        tentative_chunk = (current_chunk + " " + word).strip() if current_chunk else word
+        if count_effective_length(tentative_chunk) > max_effective_chars:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = word
+            else:
+                chunks.append(word)
+                current_chunk = ""
+        else:
+            current_chunk = tentative_chunk
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    return chunks
+
+def batch_chunks(chunks, batch_size):
+    """Yield successive batches of chunks."""
+    for i in range(0, len(chunks), batch_size):
+        yield chunks[i:i + batch_size]
 
 def split_lines_greedy(lines, chunk_size):
     """Greedily split lines into chunks of up to chunk_size lines."""
@@ -165,31 +213,38 @@ def run_inference(
                             print(f"Created temporary audio prompt file: {temp_audio_prompt_path} (orig sr: {sr})")
 
                 # --- Chunking ---
-                lines = [line.strip() for line in text_input.splitlines() if line.strip()]
-                chunks = split_lines_greedy(lines, chunk_size=chunk_size)
+                chunk_size = auto_adjust_chunk_size(text_input, chunk_size)
+                print(f"Auto-selected chunk size: {chunk_size} effective characters per chunk.")
+                # New: Split by effective character count (~64 chars per chunk)
+                chunks = split_by_words_respecting_special_tokens(text_input, max_effective_chars=chunk_size)
 
-                print(f"Chunked into {len(chunks)} chunks.")
+                print(f"Chunked into {len(chunks)} chunks (based on effective character count).")
 
                 audio_segments = []
 
                 start_time = time.time()
 
-                for idx, chunk in enumerate(chunks):
+                batch_size = 4  # Adjust based on your GPU VRAM (e.g., 2–8)
+
+                for batch_idx, chunk_batch in enumerate(batch_chunks(chunks, batch_size)):
+                    print(
+                        f"Generating batch {batch_idx + 1}/{(len(chunks) + batch_size - 1) // batch_size} with {len(chunk_batch)} chunks...")
+
+                    # Combine chunks in the batch into one input string
                     if audio_prompt_input:
-                        chunk_input = (audio_prompt_text_input + "\n" + chunk).strip()
+                        batch_input_text = "\n".join(
+                            (audio_prompt_text_input + "\n" + chunk).strip() for chunk in chunk_batch)
                     else:
-                        chunk_input = chunk.strip()
+                        batch_input_text = "\n".join(chunk.strip() for chunk in chunk_batch)
 
-                    num_lines = chunk_input.count("\n") + 1
-                    scaling_factor = num_lines / chunk_size
+                    effective_chars = count_effective_length(batch_input_text)
+                    scaling_factor = effective_chars / chunk_size
                     adjusted_tokens = int(max_new_tokens * scaling_factor)
-                    adjusted_tokens = max(256, adjusted_tokens)  # Never go lower than 256
+                    adjusted_tokens = max(256, adjusted_tokens)
 
-                    print(f"Generating chunk {idx+1}/{len(chunks)} ({num_lines} lines, {adjusted_tokens} tokens)...")
-
-                    with torch.inference_mode():
-                        generated_chunk_audio = model.generate(
-                            chunk_input,
+                    with torch.inference_mode(), torch.cuda.amp.autocast(dtype=torch.float16):
+                        generated_batch_audio = model.generate(
+                            batch_input_text,
                             max_tokens=adjusted_tokens,
                             cfg_scale=cfg_scale,
                             temperature=temperature,
@@ -199,12 +254,12 @@ def run_inference(
                             audio_prompt=prompt_path_for_generate,
                         )
 
-                    if generated_chunk_audio is not None:
-                        audio_segments.append(generated_chunk_audio)
+                    if generated_batch_audio is not None:
+                        audio_segments.append(generated_batch_audio)
 
-                        # Add a small silence buffer between chunks
-                        if idx < len(chunks) - 1:  # No pause after the last chunk
-                            silence_duration_sec = 0.2  # 200 milliseconds of silence
+                        # Add a small silence buffer **after the batch** (but NOT after the last batch)
+                        if batch_idx < (len(chunks) + batch_size - 1) // batch_size - 1:
+                            silence_duration_sec = 0.2
                             silence_samples = int(44100 * silence_duration_sec)
                             silence = np.zeros(silence_samples, dtype=np.float32)
                             audio_segments.append(silence)
@@ -309,12 +364,12 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
             )
             with gr.Accordion("Generation Parameters", open=False):
                 chunk_size = gr.Number(
-                    label="# of Lines per Generation",
-                    minimum=1,
-                    value=4,
-                    precision=0,  # No decimal points
+                    label="Chunk Size (Effective Characters)",
+                    minimum=0,
+                    value=0,
+                    precision=0,
                     step=1,
-                    info="Sets the number of lines to generate at a time. (use smaller number for dialogue with longer lines, larger number for dialogue with smaller lines)",
+                    info="If 0, auto-selects chunk size for optimal speed. Otherwise, set number of effective characters per generation chunk."
                 )
                 max_new_tokens = gr.Slider(
                     label="Max New Tokens (Audio Length)",
