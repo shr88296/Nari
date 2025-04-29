@@ -234,7 +234,7 @@ def run_inference(
                 adjusted_tokens = int(max_new_tokens * scaling_factor)
                 adjusted_tokens = max(256, adjusted_tokens)
 
-                with torch.inference_mode(), torch.amp.autocast(dtype=torch.float16):
+                with torch.inference_mode(), torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                     generated_batch_audio = model.generate(
                         batch_input_text,
                         max_tokens=adjusted_tokens,
