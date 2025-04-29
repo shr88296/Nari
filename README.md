@@ -83,6 +83,47 @@ output = model.generate(text, use_torch_compile=True, verbose=True)
 model.save_audio("simple.mp3", output)
 ```
 
+### As a REST API Server
+
+Dia also provides a FastAPI-based REST API for easy integration with web applications and services.
+
+```bash
+# Install dependencies
+pip install fastapi uvicorn python-multipart
+
+# Run the API server
+uv run api.py
+```
+
+This will start a server at `http://localhost:8000` with the following endpoints:
+
+- **POST /generate**: Convert text to speech
+- **POST /voice-clone**: Clone a voice from an audio file
+- **POST /batch**: Process multiple texts in batch mode
+- **GET /health**: Check API server status
+
+You can access interactive API documentation at `http://localhost:8000/docs`.
+
+#### Example API Usage
+
+```python
+import requests
+
+# Generate speech
+response = requests.post(
+    "http://localhost:8000/generate",
+    json={
+        "text": "[S1] Hello, this is Dia speaking. [S2] It's nice to meet you!",
+        "cfg_scale": 3.0,
+        "temperature": 1.3
+    }
+)
+
+# Save the audio response
+with open("output.wav", "wb") as f:
+    f.write(response.content)
+```
+
 A pypi package and a working CLI tool will be available soon.
 
 ## 💻 Hardware and Inference Speed
