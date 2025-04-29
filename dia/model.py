@@ -81,12 +81,14 @@ class Dia:
         config: DiaConfig,
         compute_dtype: str | ComputeDtype = ComputeDtype.FLOAT32,
         device: torch.device | None = None,
+        device_map: str = "auto",
     ):
         """Initializes the Dia model.
 
         Args:
             config: The configuration object for the model.
             device: The device to load the model onto. If None, will automatically select the best available device.
+            device_map: How to distribute the model across devices ('auto', 'balanced', 'balanced_low_0', 'sequential').
 
         Raises:
             RuntimeError: If there is an error loading the DAC model.
@@ -99,6 +101,7 @@ class Dia:
         self.compute_dtype = compute_dtype.to_dtype()
         self.model = DiaModel(config, self.compute_dtype)
         self.dac_model = None
+        self.device_map = device_map
 
     @classmethod
     def from_local(
@@ -107,6 +110,7 @@ class Dia:
         checkpoint_path: str,
         compute_dtype: str | ComputeDtype = ComputeDtype.FLOAT32,
         device: torch.device | None = None,
+        device_map: str = "auto",
     ) -> "Dia":
         """Loads the Dia model from local configuration and checkpoint files.
 
@@ -114,6 +118,7 @@ class Dia:
             config_path: Path to the configuration JSON file.
             checkpoint_path: Path to the model checkpoint (.pth) file.
             device: The device to load the model onto. If None, will automatically select the best available device.
+            device_map: How to distribute the model across devices ('auto', 'balanced', 'balanced_low_0', 'sequential').
 
         Returns:
             An instance of the Dia model loaded with weights and set to eval mode.
@@ -126,10 +131,10 @@ class Dia:
         if config is None:
             raise FileNotFoundError(f"Config file not found at {config_path}")
 
-        dia = cls(config, compute_dtype, device)
+        dia = cls(config, compute_dtype, device, device_map)
 
         try:
-            state_dict = torch.load(checkpoint_path, map_location=dia.device)
+            state_dict = torch.load(checkpoint_path, map_location="cpu")
             dia.model.load_state_dict(state_dict)
         except FileNotFoundError:
             raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}")
@@ -147,6 +152,7 @@ class Dia:
         model_name: str = "nari-labs/Dia-1.6B",
         compute_dtype: str | ComputeDtype = ComputeDtype.FLOAT32,
         device: torch.device | None = None,
+        device_map: str = "auto",
     ) -> "Dia":
         """Loads the Dia model from a Hugging Face Hub repository.
 
@@ -157,6 +163,7 @@ class Dia:
             model_name: The Hugging Face Hub repository ID (e.g., "nari-labs/Dia-1.6B").
             compute_dtype: The computation dtype to use.
             device: The device to load the model onto. If None, will automatically select the best available device.
+            device_map: How to distribute the model across devices ('auto', 'balanced', 'balanced_low_0', 'sequential').
 
         Returns:
             An instance of the Dia model loaded with weights and set to eval mode.
