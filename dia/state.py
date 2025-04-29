@@ -97,6 +97,8 @@ class KVCache:
         )
 
     def update(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.current_idx >= self.k.shape[2]:
+            raise IndexError("KVCache is full; cannot update further.")
         self.k[:, :, self.current_idx : self.current_idx + 1, :] = k
         self.v[:, :, self.current_idx : self.current_idx + 1, :] = v
         self.current_idx += 1
@@ -104,6 +106,8 @@ class KVCache:
 
     def prefill(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         prefill_len = k.shape[2]
+        if prefill_len > self.k.shape[2]:
+            raise ValueError("Prefill length exceeds cache capacity.")
         self.k[:, :, :prefill_len, :] = k
         self.v[:, :, :prefill_len, :] = v
         self.current_idx = prefill_len - 1

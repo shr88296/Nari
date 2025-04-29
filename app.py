@@ -15,14 +15,18 @@ from dia.model import Dia
 # --- Global Setup ---
 parser = argparse.ArgumentParser(description="Gradio interface for Nari TTS")
 parser.add_argument("--device", type=str, default=None, help="Force device (e.g., 'cuda', 'mps', 'cpu')")
-parser.add_argument("--share", action="store_true", help="Enable Gradio sharing")
+parser.add_argument("--share", action="store_true", help="Creates a public Gradio link (for sharing on the web)")
 
 args = parser.parse_args()
 
 
 # Determine device
 if args.device:
-    device = torch.device(args.device)
+    try:
+        device = torch.device(args.device)
+    except Exception as e:
+        print(f"Invalid device '{args.device}': {e}")
+        exit(1)
 elif torch.cuda.is_available():
     device = torch.device("cuda")
 # Simplified MPS check for broader compatibility
