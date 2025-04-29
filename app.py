@@ -40,8 +40,19 @@ print(f"Using device: {device}")
 # Load Nari model and config
 print("Loading Nari model...")
 try:
-    # Use the function from inference.py
-    model = Dia.from_pretrained("RobAgrees/quantized-dia-1.6B-int8", compute_dtype="int8", device=device)
+    # Step 1: Load model normally
+    model = Dia.from_pretrained(
+        "RobAgrees/quantized-dia-1.6B-int8",
+        compute_dtype="float32",
+        device=device
+    )
+
+    # Step 2: Apply dynamic quantization
+    model.model = torch.quantization.quantize_dynamic(
+        model.model,
+        {torch.nn.Linear, torch.nn.LSTM},
+        dtype=torch.qint8
+    )
 
 except Exception as e:
     print(f"Error loading Nari model: {e}")
