@@ -225,13 +225,7 @@ def run_inference(
                 print(
                     f"Generating batch {batch_idx + 1}/{(len(chunks) + batch_size - 1) // batch_size} with {len(chunk_batch)} chunks...")
 
-                # Combine chunks in the batch into one input string
-                if audio_prompt_input:
-                    batch_input_text = "\n".join(
-                        (audio_prompt_text_input + "\n" + chunk).strip() for chunk in chunk_batch)
-                else:
-                    batch_input_text = "\n".join(chunk.strip() for chunk in chunk_batch)
-
+                batch_input_text = "\n".join(chunk.strip() for chunk in chunk_batch)
                 effective_chars = count_effective_length(batch_input_text)
                 scaling_factor = effective_chars / chunk_size
                 adjusted_tokens = int(max_new_tokens * scaling_factor)
@@ -247,6 +241,7 @@ def run_inference(
                         cfg_filter_top_k=cfg_filter_top_k,
                         use_torch_compile=False,
                         audio_prompt=prompt_path_for_generate,
+                        audio_prompt_text=audio_prompt_text_input,
                     )
 
                 if generated_batch_audio is not None:
