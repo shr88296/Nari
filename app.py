@@ -44,7 +44,7 @@ try:
     # Step 1: Load model normally
     model = Dia.from_pretrained(
         "RobAgrees/quantized-dia-1.6B-int8",
-        compute_dtype="int8",
+        compute_dtype="qint8",
         device=device
     )
 
