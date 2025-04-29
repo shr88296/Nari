@@ -44,15 +44,8 @@ try:
     # Step 1: Load model normally
     model = Dia.from_pretrained(
         "RobAgrees/quantized-dia-1.6B-int8",
-        compute_dtype="float32",
+        compute_dtype="int8",
         device=device
-    )
-
-    # Step 2: Apply dynamic quantization
-    model.model = torch.quantization.quantize_dynamic(
-        model.model,
-        {torch.nn.Linear, torch.nn.LSTM},
-        dtype=torch.qint8
     )
 
 except Exception as e:
