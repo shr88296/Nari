@@ -252,22 +252,8 @@ class Dia:
 
         return prefill, prefill_step
 
-    def _prepare_generation(self, text: str, audio_prompt: str | torch.Tensor | None, prompt_text_tokens: torch.Tensor | None, verbose: bool):
-        user_text_tokens = self._prepare_text_input(text)
-
-        if prompt_text_tokens is not None and prompt_text_tokens.shape[1] > 0:
-            enc_input_cond = torch.cat([prompt_text_tokens, user_text_tokens], dim=1)
-        else:
-            enc_input_cond = user_text_tokens
-
-        # Final safety truncation
-        if enc_input_cond.shape[1] == 0:
-            raise ValueError("Generated input is empty after prep. Cannot proceed.")
-
-        enc_input_cond = enc_input_cond[:, :self.config.data.text_length]
-        print("prompt_text_tokens:", None if prompt_text_tokens is None else prompt_text_tokens.shape)
-        print("user_text_tokens:", user_text_tokens.shape)
-        print("enc_input_cond:", enc_input_cond.shape)
+    def _prepare_generation(self, text: str, audio_prompt: str | torch.Tensor | None, verbose: bool):
+        enc_input_cond = self._prepare_text_input(text)
         enc_input_uncond = torch.zeros_like(enc_input_cond)
         enc_input = torch.cat([enc_input_uncond, enc_input_cond], dim=0)
 
@@ -395,19 +381,16 @@ class Dia:
             print("Warning: audio_prompt_path is deprecated. Use audio_prompt instead.")
             audio_prompt = audio_prompt_path
         if audio_prompt_text:
-            # Process audio_prompt_text separately
-            prompt_text_tokens = self._prepare_text_input(audio_prompt_text)
-            # You now have prompt_text_tokens as a tensor you can condition on
-            # (store, feed into encoder, KV cache, etc. depending on your architecture)
+            full_text = f"{audio_prompt_text.strip()}\n{text.strip()}"
         else:
-            prompt_text_tokens = None
+            full_text = text.strip()
         if use_cfg_filter is not None:
             print("Warning: use_cfg_filter is deprecated.")
 
         if verbose:
             total_start_time = time.time()
 
-        dec_state, dec_output = self._prepare_generation(text, audio_prompt, prompt_text_tokens, verbose)
+        dec_state, dec_output = self._prepare_generation(full_text, audio_prompt, verbose)
         dec_step = dec_output.prefill_step - 1
 
         bos_countdown = max_delay_pattern

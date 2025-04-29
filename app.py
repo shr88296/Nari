@@ -226,8 +226,9 @@ def run_inference(
                     f"Generating batch {batch_idx + 1}/{(len(chunks) + batch_size - 1) // batch_size} with {len(chunk_batch)} chunks...")
 
                 batch_input_text = "\n".join(chunk.strip() for chunk in chunk_batch).strip()
+
                 if not batch_input_text:
-                    raise gr.Error("All chunks were empty after trimming.")
+                    raise gr.Error("All chunks in this batch were empty after trimming. Cannot generate.")
                 effective_chars = count_effective_length(batch_input_text)
                 scaling_factor = effective_chars / chunk_size
                 adjusted_tokens = int(max_new_tokens * scaling_factor)
