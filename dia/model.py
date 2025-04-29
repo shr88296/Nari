@@ -255,12 +255,19 @@ class Dia:
     def _prepare_generation(self, text: str, audio_prompt: str | torch.Tensor | None, prompt_text_tokens: torch.Tensor | None, verbose: bool):
         user_text_tokens = self._prepare_text_input(text)
 
-        if prompt_text_tokens is not None:
-            # Concatenate the audio prompt text tokens first
-            enc_input_cond = torch.cat([prompt_text_tokens, user_text_tokens], dim=1)  # [batch, sequence]
-            enc_input_cond = enc_input_cond[:, :self.config.data.text_length]  # Truncate if needed
+        if prompt_text_tokens is not None and prompt_text_tokens.shape[1] > 0:
+            enc_input_cond = torch.cat([prompt_text_tokens, user_text_tokens], dim=1)
         else:
             enc_input_cond = user_text_tokens
+
+        # Final safety truncation
+        if enc_input_cond.shape[1] == 0:
+            raise ValueError("Generated input is empty after prep. Cannot proceed.")
+
+        enc_input_cond = enc_input_cond[:, :self.config.data.text_length]
+        print("prompt_text_tokens:", None if prompt_text_tokens is None else prompt_text_tokens.shape)
+        print("user_text_tokens:", user_text_tokens.shape)
+        print("enc_input_cond:", enc_input_cond.shape)
         enc_input_uncond = torch.zeros_like(enc_input_cond)
         enc_input = torch.cat([enc_input_uncond, enc_input_cond], dim=0)
 
