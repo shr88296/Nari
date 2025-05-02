@@ -407,8 +407,7 @@ class Dia:
             self._decoder_step = torch.compile(self._decoder_step, fullgraph=True, mode="max-autotune")
             self._compiled = True
 
-        text_tokens = self._encode_text(text)
-        dec_state, dec_output = self._prepare_generation(text_tokens, audio_prompt)
+        dec_state, dec_output = self._prepare_generation(self._encode_text(text), audio_prompt)
         dec_step = dec_output.prefill_step - 1
         current_idx = torch.tensor([dec_step], device=self.device)
 
