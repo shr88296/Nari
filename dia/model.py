@@ -271,7 +271,6 @@ class Dia:
             audio_prompt = self.load_audio(audio_prompt)
         prefill, prefill_step = self._prepare_audio_prompt(audio_prompt)
 
-
         enc_state = EncoderInferenceState.new(self.config, enc_input_cond)
         encoder_out = self.model.encoder(enc_input, enc_state)
 
