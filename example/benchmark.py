@@ -4,7 +4,6 @@ import torch
 
 from dia.model import Dia
 
-
 torch._inductor.config.coordinate_descent_tuning = True
 torch._inductor.config.triton.unique_kernel_names = True
 torch._inductor.config.fx_graph_cache = True
@@ -29,9 +28,11 @@ test_cases = [
 # Wram up
 for _ in range(2):
     text = choice(test_cases)
+    output = model.generate(text, audio_prompt="./example_prompt.mp3", use_torch_compile=True, verbose=True)
     output = model.generate(text, use_torch_compile=True, verbose=True)
 
 # Benchmark
 for _ in range(10):
     text = choice(test_cases)
     output = model.generate(text, use_torch_compile=True, verbose=True)
+    output = model.generate(text, audio_prompt="./example_prompt.mp3", use_torch_compile=True, verbose=True)
