@@ -531,7 +531,7 @@ class Dia:
         audio_values, _, _ = self.dac_model.quantizer.from_codes(audio_codes)
         audio_values = self.dac_model.decode(audio_values)
         audio_values: torch.Tensor
-        return audio_values.squeeze(0)
+        return audio_values.squeeze()
 
     def load_audio(self, audio_path: str) -> torch.Tensor:
         """Loads and preprocesses an audio file for use as a prompt.
