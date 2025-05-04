@@ -1,10 +1,10 @@
 import argparse
+import contextlib
 import gc
+import io
+import random
 import tempfile
 import time
-import random
-import io
-import contextlib
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -314,8 +314,10 @@ def run_inference(
     try:
         torch.cuda.empty_cache()
         gc.collect()
-    except:
-        print("No cache to clear or garbage to collect")
+    except RuntimeError as e:
+        print(f"CUDA cache clear failed: {e}")
+    except Exception as e:
+        print(f"Garbage collection failed: {e}")
     finally:
         print("Generation completed")
 
