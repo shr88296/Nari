@@ -1,5 +1,5 @@
-import torch
 from dia.model import Dia
+import torch
 
 device = torch.device("cpu")
 
