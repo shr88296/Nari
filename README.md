@@ -98,8 +98,8 @@ model.save_audio("simple.mp3", output)
 If you're on Mac with Apple silicon, you can use the following code to make it work. It'll only run on CPU though.
 
 ```python
-import torch
 from dia.model import Dia
+import torch
 
 device = torch.device("cpu")
 
