@@ -42,6 +42,10 @@ def _sample_next_token(
         mask_eos_unless_highest_BCxV = torch.zeros_like(logits_BCxV, dtype=torch.bool)
         mask_eos_unless_highest_BCxV[eos_not_highest_mask_BC, audio_eos_value] = True
         logits_BCxV = logits_BCxV.masked_fill(mask_eos_unless_highest_BCxV, -torch.inf)
+        eos_highest_mask_BC = top_logit_indices_BC == audio_eos_value
+        mask_eos_highest_BCxV = torch.zeros_like(logits_BCxV, dtype=torch.bool)
+        mask_eos_highest_BCxV[eos_highest_mask_BC, :audio_eos_value] = True
+        logits_BCxV = logits_BCxV.masked_fill(mask_eos_highest_BCxV, -torch.inf)
 
     if top_k is not None:
         _, top_k_indices_BCxV = torch.topk(logits_BCxV, k=top_k, dim=-1)
@@ -367,9 +371,7 @@ class Dia:
         enc_state = EncoderInferenceState.new(self.config, enc_input_cond)
         encoder_out = self.model.encoder(enc_input, enc_state)
 
-        dec_cross_attn_cache = self.model.decoder.precompute_cross_attn_cache(
-            encoder_out, enc_state.positions, enc_state.padding_mask
-        )
+        dec_cross_attn_cache = self.model.decoder.precompute_cross_attn_cache(encoder_out)
         dec_state = DecoderInferenceState.new(
             self.config, enc_state, encoder_out, dec_cross_attn_cache, self.compute_dtype
         )
@@ -429,6 +431,11 @@ class Dia:
         cond_logits_BxCxV = logits_last_Bx2xCxV[:, 1, :, :]  # Shape [B, C, V]
         logits_BxCxV = cond_logits_BxCxV + cfg_scale * (cond_logits_BxCxV - uncond_logits_BxCxV)
 
+        _, top_k_indices_BxCxk = torch.topk(logits_BxCxV, k=top_k, dim=-1)
+        mask_BxCxV = torch.ones_like(logits_BxCxV, dtype=torch.bool)
+        mask_BxCxV = mask_BxCxV.scatter(dim=-1, index=top_k_indices_BxCxk, value=False)
+        logits_BxCxV = cond_logits_BxCxV.masked_fill(mask_BxCxV, -torch.inf)
+
         logits_BxCxV[:, audio_eos_value + 1 :] = torch.full_like(
             logits_BxCxV[:, audio_eos_value + 1 :],
             fill_value=-torch.inf,
@@ -437,7 +444,6 @@ class Dia:
             logits_BxCxV[1:, audio_eos_value:],
             fill_value=-torch.inf,
         )
-        logits_BxCxV[:, 0, audio_eos_value] *= torch.tensor(0.8, device=self.device)
 
         flat_logits_BCxV = logits_BxCxV.view(B * self.config.data.channels, -1)
 

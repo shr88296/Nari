@@ -18,7 +18,14 @@ text_to_generate = "[S1] Hello, how are you? [S2] I'm good, thank you. [S1] What
 
 # It will only return the audio from the text_to_generate
 output = model.generate(
-    clone_from_text + text_to_generate, audio_prompt=clone_from_audio, use_torch_compile=True, verbose=True
+    clone_from_text + text_to_generate,
+    audio_prompt=clone_from_audio,
+    use_torch_compile=False,
+    verbose=True,
+    cfg_scale=4.0,
+    temperature=1.8,
+    top_p=0.90,
+    cfg_filter_top_k=50,
 )
 
 model.save_audio("voice_clone.mp3", output)

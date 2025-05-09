@@ -16,12 +16,10 @@ def _normalize_axes(axes: tuple[int, ...], ndim: int) -> tuple[int, ...]:
 class DenseGeneral(nn.Module):
     """
     PyTorch equivalent of flax.linen.DenseGeneral with shapes defined at init.
-
     Stores weights (`kernel`) in the same layout as Jax and uses torch.tensordot
     for the generalized matrix multiplication. Weight/bias shapes are calculated
     and parameters created during initialization based on config.
     `load_weights` validates shapes and copies data.
-
     Attributes:
         axis (Tuple[int, ...]): Input axis or axes to contract.
         in_shapes (Tuple[int, ...]): Sizes of the input dimensions specified by `axis`.
@@ -126,7 +124,10 @@ class RotaryEmbedding(nn.Module):
         first_half, second_half = torch.chunk(inputs.to(torch.float32), 2, dim=-1)
         first_part = first_half * cos - second_half * sin
         second_part = second_half * cos + first_half * sin
-        return torch.cat((first_part.to(self.compute_dtype), second_part.to(self.compute_dtype)), dim=-1)
+        return torch.cat(
+            (first_part.to(self.compute_dtype), second_part.to(self.compute_dtype)),
+            dim=-1,
+        )
 
 
 class Attention(nn.Module):
@@ -203,7 +204,6 @@ class Attention(nn.Module):
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         """
         Performs attention calculation with optional KV caching.
-
         Args:
             Xq: Query tensor (B, T, D). T=1 during single-step decoding.
             Xkv: Key/Value source tensor (B, S, E). S=1 during single-step decoding for self-attn.
@@ -212,7 +212,6 @@ class Attention(nn.Module):
             attn_mask: Attention mask.
             cache: KVCache.
             prefill: If True, use prefill mode.
-
         Returns:
             A tuple containing:
             - output: The attention output tensor (B, T, output_dim).
@@ -223,7 +222,8 @@ class Attention(nn.Module):
         original_dtype = Xq.dtype
 
         Xq_BxTxNxH = self.q_proj(Xq)
-        Xq_BxTxNxH = self.rotary_emb(Xq_BxTxNxH, position=q_positions)
+        if not self.is_cross_attn:
+            Xq_BxTxNxH = self.rotary_emb(Xq_BxTxNxH, position=q_positions)
         Xq_BxNxTxH = Xq_BxTxNxH.transpose(1, 2)
 
         attn_k: torch.Tensor | None = None
@@ -234,7 +234,8 @@ class Attention(nn.Module):
         else:
             Xk_BxSxKxH = self.k_proj(Xkv)  # (B, S, K, H)
             Xv_BxSxKxH = self.v_proj(Xkv)  # (B, S, K, H)
-            Xk_BxSxKxH = self.rotary_emb(Xk_BxSxKxH, position=kv_positions)  # (B, S, K, H)
+            if not self.is_cross_attn:
+                Xk_BxSxKxH = self.rotary_emb(Xk_BxSxKxH, position=kv_positions)  # (B, S, K, H)
 
             Xk_BxKxSxH = Xk_BxSxKxH.transpose(1, 2)  # (B, K, S, H)
             Xv_BxKxSxH = Xv_BxSxKxH.transpose(1, 2)  # (B, K, S, H)
@@ -296,7 +297,11 @@ class EncoderLayer(nn.Module):
             eps=model_config.normalization_layer_epsilon,
             dtype=torch.float32,
         )
-        self.mlp = MlpBlock(embed_dim=embed_dim, intermediate_dim=enc_config.n_hidden, compute_dtype=compute_dtype)
+        self.mlp = MlpBlock(
+            embed_dim=embed_dim,
+            intermediate_dim=enc_config.n_hidden,
+            compute_dtype=compute_dtype,
+        )
 
     def forward(
         self,
@@ -457,6 +462,7 @@ class DecoderLayer(nn.Module):
             kv_positions=state.enc_positions,
             cache=cross_attn_cache,
             current_idx=current_idx,
+            attn_mask=state.cross_attn_mask,
         )
         x = residual + ca_out
 
@@ -506,8 +512,6 @@ class Decoder(nn.Module):
     def precompute_cross_attn_cache(
         self,
         enc_out: torch.Tensor,  # (B, S, E)
-        enc_positions: torch.Tensor,  # (B, S)
-        k_padding_mask: torch.Tensor | None = None,
     ) -> list[KVCache]:
         """
         Computes the Key and Value tensors for cross-attention for each layer from the encoder output.
@@ -519,11 +523,8 @@ class Decoder(nn.Module):
             k_proj = cross_attn_module.k_proj(enc_out)
             v_proj = cross_attn_module.v_proj(enc_out)
 
-            k_proj = cross_attn_module.rotary_emb(k_proj, position=enc_positions)
             k = k_proj.transpose(1, 2)
             v = v_proj.transpose(1, 2)
-            if k_padding_mask is not None:
-                k = k.masked_fill(~k_padding_mask.unsqueeze(1).unsqueeze(3), 0.0)
 
             per_layer_kv_cache.append(KVCache.from_kv(k, v))
 
@@ -537,7 +538,6 @@ class Decoder(nn.Module):
     ) -> torch.Tensor:
         """
         Performs a single decoding step, managing KV caches layer by layer.
-
         Returns:
             A tuple containing:
             - logits_Bx1xCV: The final output logits for the current step (B, 1, C*V), cast to float32.
@@ -568,7 +568,6 @@ class Decoder(nn.Module):
     def forward(self, tgt_ids_BxTxC: torch.Tensor, state: DecoderInferenceState) -> torch.Tensor:
         """
         Forward pass for the Decoder stack, managing KV caches.
-
         Args:
             tgt_ids_BxTxC: Target token IDs (B, T, C).
             encoder_out: Output from the encoder (B, S, E).
@@ -582,7 +581,6 @@ class Decoder(nn.Module):
             precomputed_cross_attn_kv: A single tuple containing the pre-computed K/V cache
                                       derived from `encoder_out`. This is passed identically
                                       to all layers.
-
         Returns:
             A tuple containing:
             - logits: The final output logits (B, T, C * V), cast to float32.
@@ -602,7 +600,13 @@ class Decoder(nn.Module):
         for i, layer in enumerate(self.layers):
             self_cache = state.self_attn_cache[i]
             cross_cache = state.cross_attn_cache[i]
-            x = layer(x, state, self_attn_cache=self_cache, cross_attn_cache=cross_cache, prefill=True)
+            x = layer(
+                x,
+                state,
+                self_attn_cache=self_cache,
+                cross_attn_cache=cross_cache,
+                prefill=True,
+            )
 
         # Final Norm
         x = self.norm(x)
