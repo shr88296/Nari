@@ -1,5 +1,7 @@
-from dia.model import Dia
 import torch
+
+from dia.model import Dia
+
 
 device = torch.device("cpu")
 
