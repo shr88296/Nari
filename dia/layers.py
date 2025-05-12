@@ -154,6 +154,10 @@ def custom_scaled_dot_product_attention(
     """
     B, N_q, T, H = query.shape
     _, N_kv, S, _ = key.shape
+
+    print(f"Query shape: {query.shape}")
+    print(f"Key shape: {key.shape}")
+    print(f"Value shape: {value.shape}")
     
     # For GQA, repeat key and value tensors to match query heads
     if num_gqa_groups > 1:
