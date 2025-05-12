@@ -7,7 +7,7 @@ from dia.model import Dia
 device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
 print(f"Using device: {device}")
 
-# Load model onto the selected device
+# Load model
 model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
 
 # Input text
