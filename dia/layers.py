@@ -299,15 +299,15 @@ class Attention(nn.Module):
             else:
                 attn_k, attn_v = cache.update(Xk_BxKxSxH, Xv_BxKxSxH, current_idx)
 
-        attn_output = F.scaled_dot_product_attention(
-            Xq_BxNxTxH,
-            attn_k,
-            attn_v,
-            attn_mask=attn_mask if not is_causal else None,
-            scale=1.0,
-            enable_gqa=self.num_gqa_groups > 1,
-            is_causal=is_causal,
-        )
+        attn_output = custom_scaled_dot_product_attention(
+                    query=Xq_BxNxTxH,
+                    key=attn_k,
+                    value=attn_v,
+                    attn_mask=attn_mask if not is_causal else None,
+                    scale=1.0,
+                    is_causal=is_causal,
+                    num_gqa_groups=self.num_gqa_groups,
+                )
 
         attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, N, H)
         output = self.o_proj(attn_output)
