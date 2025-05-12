@@ -128,6 +128,7 @@ class RotaryEmbedding(nn.Module):
         second_part = second_half * cos + first_half * sin
         return torch.cat((first_part.to(self.compute_dtype), second_part.to(self.compute_dtype)), dim=-1)
 
+
 def custom_scaled_dot_product_attention(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -157,7 +158,7 @@ def custom_scaled_dot_product_attention(
 
     # For GQA, repeat key and value tensors to match query heads
     if num_gqa_groups > 1:
-        key = key.repeat_interleave(num_gqa_groups, dim=1)    # (B, N_q, S, H)
+        key = key.repeat_interleave(num_gqa_groups, dim=1)  # (B, N_q, S, H)
         value = value.repeat_interleave(num_gqa_groups, dim=1)  # (B, N_q, S, H)
 
     # Compute attention scores: (B, N_q, T, H) @ (B, N_q, H, S) -> (B, N_q, T, S)
@@ -166,11 +167,11 @@ def custom_scaled_dot_product_attention(
     # Apply causal mask if needed
     if is_causal:
         causal_mask = torch.tril(torch.ones(T, S, dtype=torch.bool, device=query.device))
-        scores = scores.masked_fill(~causal_mask, float('-inf'))
+        scores = scores.masked_fill(~causal_mask, float("-inf"))
 
     # Apply attention mask if provided
     if attn_mask is not None:
-        scores = scores.masked_fill(~attn_mask, float('-inf'))
+        scores = scores.masked_fill(~attn_mask, float("-inf"))
 
     # Softmax over the last dimension (S)
     attn_weights = F.softmax(scores, dim=-1)
@@ -179,6 +180,7 @@ def custom_scaled_dot_product_attention(
     output = torch.matmul(attn_weights, value)
 
     return output
+
 
 class Attention(nn.Module):
     """Attention using DenseGeneral."""
@@ -300,14 +302,14 @@ class Attention(nn.Module):
                 attn_k, attn_v = cache.update(Xk_BxKxSxH, Xv_BxKxSxH, current_idx)
 
         attn_output = custom_scaled_dot_product_attention(
-                    query=Xq_BxNxTxH,
-                    key=attn_k,
-                    value=attn_v,
-                    attn_mask=attn_mask if not is_causal else None,
-                    scale=1.0,
-                    is_causal=is_causal,
-                    num_gqa_groups=self.num_gqa_groups,
-                )
+            query=Xq_BxNxTxH,
+            key=attn_k,
+            value=attn_v,
+            attn_mask=attn_mask if not is_causal else None,
+            scale=1.0,
+            is_causal=is_causal,
+            num_gqa_groups=self.num_gqa_groups,
+        )
 
         attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, N, H)
         output = self.o_proj(attn_output)
