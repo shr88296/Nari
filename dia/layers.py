@@ -139,7 +139,7 @@ def custom_scaled_dot_product_attention(
 ) -> torch.Tensor:
     """
     Custom scaled dot-product attention with GQA support for MPS compatibility.
-    
+
     Args:
         query: (B, N_q, T, H) - Query tensor, N_q = num_query_heads
         key: (B, N_kv, S, H) - Key tensor, N_kv = num_kv_heads
@@ -148,7 +148,7 @@ def custom_scaled_dot_product_attention(
         scale: Scaling factor for attention scores
         is_causal: If True, apply causal masking
         num_gqa_groups: Number of query groups per KV head (N_q / N_kv)
-    
+
     Returns:
         output: (B, N_q, T, H) - Attention output
     """
