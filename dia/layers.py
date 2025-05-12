@@ -154,30 +154,30 @@ def custom_scaled_dot_product_attention(
     """
     B, N_q, T, H = query.shape
     _, N_kv, S, _ = key.shape
-    
+
     # For GQA, repeat key and value tensors to match query heads
     if num_gqa_groups > 1:
         key = key.repeat_interleave(num_gqa_groups, dim=1)    # (B, N_q, S, H)
         value = value.repeat_interleave(num_gqa_groups, dim=1)  # (B, N_q, S, H)
-    
+
     # Compute attention scores: (B, N_q, T, H) @ (B, N_q, H, S) -> (B, N_q, T, S)
     scores = torch.matmul(query, key.transpose(-1, -2)) * scale
-    
+
     # Apply causal mask if needed
     if is_causal:
         causal_mask = torch.tril(torch.ones(T, S, dtype=torch.bool, device=query.device))
         scores = scores.masked_fill(~causal_mask, float('-inf'))
-    
+
     # Apply attention mask if provided
     if attn_mask is not None:
         scores = scores.masked_fill(~attn_mask, float('-inf'))
-    
+
     # Softmax over the last dimension (S)
     attn_weights = F.softmax(scores, dim=-1)
-    
+
     # Compute output: (B, N_q, T, S) @ (B, N_q, S, H) -> (B, N_q, T, H)
     output = torch.matmul(attn_weights, value)
-    
+
     return output
 
 class Attention(nn.Module):
