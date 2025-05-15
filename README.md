@@ -5,7 +5,7 @@
 </p>
 <p align="center">
 <a href="https://tally.so/r/meokbo" target="_blank"><img alt="Static Badge" src="https://img.shields.io/badge/Join-Waitlist-white?style=for-the-badge"></a>
-<a href="https://discord.gg/pgdB5YRe" target="_blank"><img src="https://img.shields.io/badge/Discord-Join%20Chat-7289DA?logo=discord&style=for-the-badge"></a>
+<a href="https://discord.gg/bJq6vjRRKv" target="_blank"><img src="https://img.shields.io/badge/Discord-Join%20Chat-7289DA?logo=discord&style=for-the-badge"></a>
 <a href="https://github.com/nari-labs/dia/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=for-the-badge" alt="LICENSE"></a>
 </p>
 <p align="center">
@@ -22,16 +22,35 @@ To accelerate research, we are providing access to pretrained model checkpoints 
 We also provide a [demo page](https://yummy-fir-7a4.notion.site/dia) comparing our model to [ElevenLabs Studio](https://elevenlabs.io/studio) and [Sesame CSM-1B](https://github.com/SesameAILabs/csm).
 
 - (Update) We have a ZeroGPU Space running! Try it now [here](https://huggingface.co/spaces/nari-labs/Dia-1.6B). Thanks to the HF team for the support :)
-- Join our [discord server](https://discord.gg/pgdB5YRe) for community support and access to new features.
+- Join our [discord server](https://discord.gg/bJq6vjRRKv) for community support and access to new features.
 - Play with a larger version of Dia: generate fun conversations, remix content, and share with friends. 🔮 Join the [waitlist](https://tally.so/r/meokbo) for early access.
 
-## ⚡️ Quickstart
+## Generation Guidelines
+
+- Keep input text length moderate 
+    - Short input (corresponding to under 5s of audio) will sound unnatural
+    - Very long input (corresponding to over 20s of audio) will make the speech unnaturally fast.
+- Use non-verbal tags sparingly, from the list in the README. Overusing or using unlisted non-verbals may cause weird artifacts.
+- Always begin input text with `[S1]`, and always alternate between `[S1]` and `[S2]` (i.e. `[S1]`... `[S1]`... is not good)
+- When using audio prompts (voice cloning), follow these instructions carefully:
+    - Provide the transcript of the to-be cloned audio before the generation text.
+    - Transcript must use `[S1]`, `[S2]` speaker tags correctly (i.e. single speaker: `[S1]`..., two speakers: `[S1]`... `[S2]`...)
+    - Duration of the to-be cloned audio should be 5~10 seconds for the best results.
+        (Keep in mind: 1 second ≈ 86 tokens)
+- Put `[S1]` or `[S2]` (the second-to-last speaker's tag) at the end of the audio to improve audio quality at the end
 
 ### Install via pip
 
 ```bash
 # Install directly from GitHub
 pip install git+https://github.com/nari-labs/dia.git
+```
+
+### Set HF_TOKEN ENV var
+
+```bash
+# Set the HF_TOKEN ENV var to auto download config from HF Hub
+export HF_TOKEN="your token"
 ```
 
 ### Run the Gradio UI
@@ -83,6 +102,23 @@ output = model.generate(text, use_torch_compile=True, verbose=True)
 model.save_audio("simple.mp3", output)
 ```
 
+If you're on Mac with Apple Silicon, you can use the following code to make it work. For MPS to work `use_torch_compile` must be set to `False`. As that feature isn't supported yet.
+
+```python
+from dia.model import Dia
+
+
+model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16")
+
+text = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
+
+# It is important to set the `use_torch_compile` argument to `False` when using Dia on MacOS.
+# This is because the `torch.compile` function is not supported on MacOS.
+output = model.generate(text, use_torch_compile=False, verbose=True)
+
+model.save_audio("simple.mp3", output)
+```
+
 A pypi package and a working CLI tool will be available soon.
 
 ## 💻 Hardware and Inference Speed
@@ -125,7 +161,7 @@ By using this model, you agree to uphold relevant legal standards and ethical re
 ## 🤝 Contributing
 
 We are a tiny team of 1 full-time and 1 part-time research-engineers. We are extra-welcome to any contributions!
-Join our [Discord Server](https://discord.gg/pgdB5YRe) for discussions.
+Join our [Discord Server](https://discord.gg/bJq6vjRRKv) for discussions.
 
 ## 🤗 Acknowledgements
 

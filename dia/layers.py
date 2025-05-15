@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from huggingface_hub import PyTorchModelHubMixin
 from torch import Tensor
 from torch.nn import RMSNorm
 
@@ -46,7 +47,6 @@ class DenseGeneral(nn.Module):
 
         factory_kwargs = {"device": device, "dtype": weight_dtype}
         self.weight = nn.Parameter(torch.empty(self.kernel_shape, **factory_kwargs))
-        self.register_parameter("bias", None)
 
     def forward(self, inputs: Tensor) -> Tensor:
         norm_axis = _normalize_axes(self.axis, inputs.ndim)
@@ -110,31 +110,76 @@ class RotaryEmbedding(nn.Module):
         self.embedding_dims = embedding_dims
         self.min_timescale = min_timescale
         self.max_timescale = max_timescale
-        self.dtype = dtype
+        self.compute_dtype = dtype
 
         half_embedding_dim = embedding_dims // 2
         fraction = (2.0 * torch.arange(0, half_embedding_dim)) / embedding_dims
-        self.register_buffer(
-            "timescale",
-            self.min_timescale * (self.max_timescale / self.min_timescale) ** fraction,
-            persistent=False,
-        )
-
-    def extra_repr(self) -> str:
-        s = f"{self.timescale.shape}"
-        return s
+        timescale = (self.min_timescale * (self.max_timescale / self.min_timescale) ** fraction).to(torch.float32)
+        self.register_buffer("timescale", timescale, persistent=False)
 
     def forward(self, inputs: torch.Tensor, position: torch.Tensor):
         """Applies RoPE."""
         position = position.unsqueeze(-1).unsqueeze(-1)
-        timescale = self.timescale.to(inputs.device)
-        sinusoid_inp = position / timescale
-        sin = torch.sin(sinusoid_inp).to(inputs.dtype)
-        cos = torch.cos(sinusoid_inp).to(inputs.dtype)
-        first_half, second_half = torch.chunk(inputs, 2, dim=-1)
+        sinusoid_inp = position / self.timescale
+        sin = torch.sin(sinusoid_inp)
+        cos = torch.cos(sinusoid_inp)
+        first_half, second_half = torch.chunk(inputs.to(torch.float32), 2, dim=-1)
         first_part = first_half * cos - second_half * sin
         second_part = second_half * cos + first_half * sin
-        return torch.cat((first_part, second_part), dim=-1)
+        return torch.cat((first_part.to(self.compute_dtype), second_part.to(self.compute_dtype)), dim=-1)
+
+
+def custom_scaled_dot_product_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attn_mask: torch.Tensor | None = None,
+    scale: float = 1.0,
+    is_causal: bool = False,
+    num_gqa_groups: int = 1,
+) -> torch.Tensor:
+    """
+    Custom scaled dot-product attention with GQA support for MPS compatibility.
+
+    Args:
+        query: (B, N_q, T, H) - Query tensor, N_q = num_query_heads
+        key: (B, N_kv, S, H) - Key tensor, N_kv = num_kv_heads
+        value: (B, N_kv, S, H) - Value tensor
+        attn_mask: (B, 1, T, S) - Attention mask, optional
+        scale: Scaling factor for attention scores
+        is_causal: If True, apply causal masking
+        num_gqa_groups: Number of query groups per KV head (N_q / N_kv)
+
+    Returns:
+        output: (B, N_q, T, H) - Attention output
+    """
+    B, N_q, T, H = query.shape
+    _, N_kv, S, _ = key.shape
+
+    # For GQA, repeat key and value tensors to match query heads
+    if num_gqa_groups > 1:
+        key = key.repeat_interleave(num_gqa_groups, dim=1)  # (B, N_q, S, H)
+        value = value.repeat_interleave(num_gqa_groups, dim=1)  # (B, N_q, S, H)
+
+    # Compute attention scores: (B, N_q, T, H) @ (B, N_q, H, S) -> (B, N_q, T, S)
+    scores = torch.matmul(query, key.transpose(-1, -2)) * scale
+
+    # Apply causal mask if needed
+    if is_causal:
+        causal_mask = torch.tril(torch.ones(T, S, dtype=torch.bool, device=query.device))
+        scores = scores.masked_fill(~causal_mask, float("-inf"))
+
+    # Apply attention mask if provided
+    if attn_mask is not None:
+        scores = scores.masked_fill(~attn_mask, float("-inf"))
+
+    # Softmax over the last dimension (S)
+    attn_weights = F.softmax(scores, dim=-1)
+
+    # Compute output: (B, N_q, T, S) @ (B, N_q, S, H) -> (B, N_q, T, H)
+    output = torch.matmul(attn_weights, value)
+
+    return output
 
 
 class Attention(nn.Module):
@@ -207,6 +252,7 @@ class Attention(nn.Module):
         cache: KVCache | None = None,  # None in Encoder, KVCache in Decoder
         prefill: bool = False,
         is_causal: bool = False,
+        current_idx: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         """
         Performs attention calculation with optional KV caching.
@@ -249,22 +295,34 @@ class Attention(nn.Module):
             if cache is None:
                 attn_k = Xk_BxKxSxH
                 attn_v = Xv_BxKxSxH
+            elif prefill:
+                attn_k, attn_v = Xk_BxKxSxH, Xv_BxKxSxH
+                cache.prefill(attn_k, attn_v)
             else:
-                if prefill:
-                    attn_k, attn_v = Xk_BxKxSxH, Xv_BxKxSxH
-                    cache.prefill(attn_k, attn_v)
-                else:
-                    attn_k, attn_v = cache.update(Xk_BxKxSxH, Xv_BxKxSxH)
+                attn_k, attn_v = cache.update(Xk_BxKxSxH, Xv_BxKxSxH, current_idx)
 
-        attn_output = F.scaled_dot_product_attention(
-            Xq_BxNxTxH,
-            attn_k,
-            attn_v,
-            attn_mask=attn_mask,
-            scale=1.0,
-            enable_gqa=self.num_gqa_groups > 1,
-            is_causal=is_causal,
-        )
+        # Use custom attention for MPS backend, otherwise use optimized PyTorch function
+        is_mps = Xq.device.type == "mps" and torch.backends.mps.is_available()
+        if is_mps:
+            attn_output = custom_scaled_dot_product_attention(
+                query=Xq_BxNxTxH,
+                key=attn_k,
+                value=attn_v,
+                attn_mask=attn_mask if not is_causal else None,
+                scale=1.0,
+                is_causal=is_causal,
+                num_gqa_groups=self.num_gqa_groups,
+            )
+        else:
+            attn_output = F.scaled_dot_product_attention(
+                Xq_BxNxTxH,
+                attn_k,
+                attn_v,
+                attn_mask=attn_mask if not is_causal else None,
+                scale=1.0,
+                enable_gqa=self.num_gqa_groups > 1,
+                is_causal=is_causal,
+            )
 
         attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, N, H)
         output = self.o_proj(attn_output)
@@ -281,6 +339,7 @@ class EncoderLayer(nn.Module):
         model_config = config.model
         enc_config = config.model.encoder
         embed_dim = enc_config.n_embd
+        self.compute_dtype = compute_dtype
 
         self.pre_sa_norm = RMSNorm(
             embed_dim,
@@ -311,7 +370,8 @@ class EncoderLayer(nn.Module):
         state: EncoderInferenceState,
     ) -> torch.Tensor:
         residual = x
-        x_norm = self.pre_sa_norm(x)
+        x_norm = self.pre_sa_norm(x).to(self.compute_dtype)
+
         sa_out = self.self_attention(
             Xq=x_norm,
             Xkv=x_norm,
@@ -322,7 +382,7 @@ class EncoderLayer(nn.Module):
         x = residual + sa_out
 
         residual = x
-        x_norm = self.post_sa_norm(x)
+        x_norm = self.post_sa_norm(x).to(self.compute_dtype)
         mlp_out = self.mlp(x_norm)
         x = residual + mlp_out
 
@@ -337,6 +397,7 @@ class Encoder(nn.Module):
         self.config = config
         model_config = config.model
         enc_config = config.model.encoder
+        self.compute_dtype = compute_dtype
 
         self.embedding = nn.Embedding(
             model_config.src_vocab_size,
@@ -360,7 +421,7 @@ class Encoder(nn.Module):
         for layer in self.layers:
             x = layer(x, state)
 
-        x = self.norm(x)
+        x = self.norm(x).to(self.compute_dtype)
         return x
 
 
@@ -375,6 +436,7 @@ class DecoderLayer(nn.Module):
         enc_config = config.model.encoder
         dec_embed_dim = dec_config.n_embd
         enc_embed_dim = enc_config.n_embd
+        self.compute_dtype = compute_dtype
 
         # Norms
         self.pre_sa_norm = RMSNorm(
@@ -431,37 +493,41 @@ class DecoderLayer(nn.Module):
         self_attn_cache: KVCache | None = None,
         cross_attn_cache: KVCache | None = None,
         prefill: bool = False,
+        current_idx: int = 0,
     ) -> torch.Tensor:
         residual = x
-        x_norm = self.pre_sa_norm(x)
+        x_norm = self.pre_sa_norm(x).to(self.compute_dtype)
+
+        self_attn_mask = state.casual_attn_mask[None, None, current_idx]
 
         sa_out = self.self_attention(
             Xq=x_norm,  # (2, 1, D)
             Xkv=x_norm,  # (2, 1, D)
             q_positions=state.dec_positions,  # (2, 1)
             kv_positions=state.dec_positions,  # (2, 1)
-            attn_mask=None,
+            attn_mask=self_attn_mask,
             cache=self_attn_cache,
             prefill=prefill,
             is_causal=prefill,
+            current_idx=current_idx,
         )
 
         x = residual + sa_out
 
         residual = x
-        x_norm = self.pre_ca_norm(x)
+        x_norm = self.pre_ca_norm(x).to(self.compute_dtype)
         ca_out = self.cross_attention(
             Xq=x_norm,
             Xkv=state.enc_out,
             q_positions=state.dec_positions,
             kv_positions=state.enc_positions,
-            attn_mask=state.dec_cross_attn_mask,
             cache=cross_attn_cache,
+            current_idx=current_idx,
         )
         x = residual + ca_out
 
         residual = x
-        x_norm = self.pre_mlp_norm(x)
+        x_norm = self.pre_mlp_norm(x).to(self.compute_dtype)
         mlp_out = self.mlp(x_norm)
         x = residual + mlp_out
 
@@ -507,6 +573,7 @@ class Decoder(nn.Module):
         self,
         enc_out: torch.Tensor,  # (B, S, E)
         enc_positions: torch.Tensor,  # (B, S)
+        k_padding_mask: torch.Tensor | None = None,
     ) -> list[KVCache]:
         """
         Computes the Key and Value tensors for cross-attention for each layer from the encoder output.
@@ -521,6 +588,8 @@ class Decoder(nn.Module):
             k_proj = cross_attn_module.rotary_emb(k_proj, position=enc_positions)
             k = k_proj.transpose(1, 2)
             v = v_proj.transpose(1, 2)
+            if k_padding_mask is not None:
+                k = k.masked_fill(~k_padding_mask.unsqueeze(1).unsqueeze(3), 0.0)
 
             per_layer_kv_cache.append(KVCache.from_kv(k, v))
 
@@ -530,6 +599,7 @@ class Decoder(nn.Module):
         self,
         tgt_ids_Bx1xC: torch.Tensor,  # [B, 1, C]
         state: DecoderInferenceState,
+        current_idx: int,
     ) -> torch.Tensor:
         """
         Performs a single decoding step, managing KV caches layer by layer.
@@ -553,6 +623,7 @@ class Decoder(nn.Module):
                 state,
                 self_attn_cache=self_cache,
                 cross_attn_cache=cross_cache,
+                current_idx=current_idx,
             )
 
         x = self.norm(x)
@@ -606,7 +677,19 @@ class Decoder(nn.Module):
         return logits_BxTxCxV.to(torch.float32)
 
 
-class DiaModel(nn.Module):
+class DiaModel(
+    nn.Module,
+    PyTorchModelHubMixin,
+    repo_url="https://github.com/nari-labs/dia",
+    pipeline_tag="text-to-speech",
+    license="apache-2.0",
+    coders={
+        DiaConfig: (
+            lambda x: x.model_dump(),
+            lambda data: DiaConfig.model_validate(data),
+        ),
+    },
+):
     """PyTorch Dia Model using DenseGeneral."""
 
     def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
