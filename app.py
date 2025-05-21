@@ -37,22 +37,15 @@ print(f"Using device: {device}")
 # Load Nari model and config
 print("Loading Nari model...")
 try:
-    if device.type == "cpu":
-        # CPU performs better on float32
-        print(f"Using device: {device}, attempting to load model with float32")
-        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
-    elif device.type == "mps":
-        # MPS (Apple Silicon) prefers float32 due to poor float16 support
-        print(f"Using device: {device}, attempting to load model with float32")
-        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
-    elif device.type == "cuda":
-        # CUDA (NVIDIA) benefits from float16
-        print(f"Using device: {device}, attempting to load model with float16")
-        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
-    else:
-        # Fallback
-        print(f"Unknown device type '{device.type}', defaulting to float16")
-        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
+    dtype_map = {
+        "cpu": "float32",
+        "mps": "float32",  # Apple M series – better with float32
+        "cuda": "float16",  # NVIDIA – better with float16
+    }
+
+    dtype = dtype_map.get(device.type, "float16")
+    print(f"Using device: {device}, attempting to load model with {dtype}")
+    model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype=dtype, device=device)
 except Exception as e:
     print(f"Error loading Nari model: {e}")
     raise
