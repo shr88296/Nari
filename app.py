@@ -51,8 +51,8 @@ try:
         model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
     else:
         # Fallback
-        print(f"Unknown device type '{device.type}', defaulting to float32")
-        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
+        print(f"Unknown device type '{device.type}', defaulting to float16")
+        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
 except Exception as e:
     print(f"Error loading Nari model: {e}")
     raise
