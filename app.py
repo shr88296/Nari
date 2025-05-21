@@ -39,12 +39,15 @@ print("Loading Nari model...")
 try:
     if device.type == "cpu":
         # CPU performs better on float32
+        print(f"Using device: {device}, attempting to load model with float32")
         model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
     elif device.type == "mps":
         # MPS (Apple Silicon) prefers float32 due to poor float16 support
+        print(f"Using device: {device}, attempting to load model with float32")
         model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
     elif device.type == "cuda":
         # CUDA (NVIDIA) benefits from float16
+        print(f"Using device: {device}, attempting to load model with float16")
         model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
     else:
         # Fallback
