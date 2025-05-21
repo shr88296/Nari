@@ -37,8 +37,19 @@ print(f"Using device: {device}")
 # Load Nari model and config
 print("Loading Nari model...")
 try:
-    # Use the function from inference.py
-    model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
+    if device.type == "cpu":
+        # CPU performs better on float32
+        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
+    elif device.type == "mps":
+        # MPS (Apple Silicon) prefers float32 due to poor float16 support
+        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
+    elif device.type == "cuda":
+        # CUDA (NVIDIA) benefits from float16
+        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
+    else:
+        # Fallback
+        print(f"Unknown device type '{device.type}', defaulting to float32")
+        model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float32", device=device)
 except Exception as e:
     print(f"Error loading Nari model: {e}")
     raise
