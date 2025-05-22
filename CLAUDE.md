@@ -143,7 +143,7 @@ The `fastapi_server.py` provides OpenAI-compatible TTS API endpoints for integra
    - Set TTS Provider: **OpenAI Compatible**
    - Model: **dia** (or tts-1, tts-1-hd)
    - API Key: **sk-anything** (any value starting with "sk-")
-   - Endpoint URL: **http://localhost:8000/v1/audio/speech**
+   - Endpoint URL: **http://localhost:7860/v1/audio/speech**
    - Voice: Choose from alloy, echo, fable, nova, onyx, shimmer
 
 3. **Available Endpoints:**
@@ -155,7 +155,7 @@ The `fastapi_server.py` provides OpenAI-compatible TTS API endpoints for integra
 **Troubleshooting:**
 - Ensure HF_TOKEN environment variable is set
 - Check server logs for model loading status
-- Test with: `curl http://localhost:8000/health`
+- Test with: `curl http://localhost:7860/health`
 
 ## Voice Cloning and Custom Voices
 
@@ -163,14 +163,14 @@ The FastAPI server supports custom voice creation through audio prompts:
 
 ### Upload Audio Prompt
 ```bash
-curl -X POST "http://localhost:8000/v1/audio_prompts/upload" \
+curl -X POST "http://localhost:7860/v1/audio_prompts/upload" \
   -F "prompt_id=my_voice" \
   -F "audio_file=@voice_sample.wav"
 ```
 
 ### Create Custom Voice Mapping
 ```bash
-curl -X POST "http://localhost:8000/v1/voice_mappings" \
+curl -X POST "http://localhost:7860/v1/voice_mappings" \
   -H "Content-Type: application/json" \
   -d '{
     "voice_id": "custom_voice",
@@ -194,6 +194,67 @@ curl -X POST "http://localhost:8000/v1/voice_mappings" \
 - Automatically resampled to 44.1kHz mono
 - Recommended: 3-10 seconds of clean speech
 - For best results: Include the speaker's voice saying the target text or similar content
+
+## Debug and Logging Features
+
+The FastAPI server includes comprehensive logging and debugging capabilities:
+
+### Command Line Options
+```bash
+# Enable debug mode with file saving
+python fastapi_server.py --debug --save-outputs --show-prompts
+
+# Custom retention period
+python fastapi_server.py --save-outputs --retention-hours 48
+
+# Development mode with all features
+python fastapi_server.py --debug --save-outputs --show-prompts --reload
+```
+
+### Configuration API
+```bash
+# Get current configuration
+curl http://localhost:7860/v1/config
+
+# Update configuration
+curl -X PUT "http://localhost:7860/v1/config" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "debug_mode": true,
+    "save_outputs": true,
+    "show_prompts": true,
+    "output_retention_hours": 24
+  }'
+```
+
+### Generation Logs API
+```bash
+# Get recent generation logs
+curl http://localhost:7860/v1/logs
+
+# Get logs for specific voice
+curl "http://localhost:7860/v1/logs?voice=alloy&limit=10"
+
+# Get specific log details
+curl http://localhost:7860/v1/logs/{log_id}
+
+# Download generated audio file
+curl http://localhost:7860/v1/logs/{log_id}/download -o output.wav
+
+# Clear all logs
+curl -X DELETE http://localhost:7860/v1/logs
+
+# Manual cleanup of old files
+curl -X POST http://localhost:7860/v1/cleanup
+```
+
+### Features
+- **Prompt Logging**: Shows original and processed text for each request
+- **Audio File Saving**: Saves all generated audio with timestamps
+- **Generation Metrics**: Tracks generation time and file sizes
+- **Automatic Cleanup**: Removes files older than retention period (default 24h)
+- **Debug Headers**: Includes generation ID in response headers
+- **Voice Tracking**: Logs which voice and audio prompts were used
 
 ### Voice Mapping
 The server maps common voice names to Dia's speaker system:

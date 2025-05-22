@@ -8,12 +8,12 @@ Dia TTS FastAPI server provides OpenAI-compatible text-to-speech API with voice 
 
 ### 1. Start the Server
 ```bash
-python fastapi_server.py --host 0.0.0.0 --port 8000
+python fastapi_server.py --host 0.0.0.0 --port 7860
 ```
 
 ### 2. Basic TTS Request
 ```bash
-curl -X POST "http://localhost:8000/v1/audio/speech" \
+curl -X POST "http://localhost:7860/v1/audio/speech" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-anything" \
   -d '{
@@ -50,18 +50,18 @@ curl -X POST "http://localhost:8000/v1/audio/speech" \
 2. Set **TTS Provider**: `OpenAI Compatible`
 3. Set **Model**: `dia`
 4. Set **API Key**: `sk-anything`
-5. Set **Endpoint URL**: `http://localhost:8000/v1/audio/speech`
+5. Set **Endpoint URL**: `http://localhost:7860/v1/audio/speech`
 6. Choose **Voice**: `alloy`, `echo`, `fable`, `nova`, `onyx`, or `shimmer`
 
 ### Custom Voice Setup
 ```bash
 # 1. Upload voice sample
-curl -X POST "http://localhost:8000/v1/audio_prompts/upload" \
+curl -X POST "http://localhost:7860/v1/audio_prompts/upload" \
   -F "prompt_id=character_voice" \
   -F "audio_file=@sample.wav"
 
 # 2. Create voice mapping
-curl -X POST "http://localhost:8000/v1/voice_mappings" \
+curl -X POST "http://localhost:7860/v1/voice_mappings" \
   -H "Content-Type: application/json" \
   -d '{
     "voice_id": "my_character",
@@ -140,14 +140,14 @@ import requests
 # Upload audio prompt
 with open("voice_sample.wav", "rb") as f:
     response = requests.post(
-        "http://localhost:8000/v1/audio_prompts/upload",
+        "http://localhost:7860/v1/audio_prompts/upload",
         data={"prompt_id": "my_voice"},
         files={"audio_file": f}
     )
 
 # Create voice mapping
 requests.post(
-    "http://localhost:8000/v1/voice_mappings",
+    "http://localhost:7860/v1/voice_mappings",
     json={
         "voice_id": "cloned_voice",
         "style": "natural",
@@ -160,7 +160,7 @@ requests.post(
 ### 3. Generate Speech
 ```python
 response = requests.post(
-    "http://localhost:8000/v1/audio/speech",
+    "http://localhost:7860/v1/audio/speech",
     json={
         "model": "dia",
         "input": "[S1] Hello, this is my cloned voice!",
@@ -179,7 +179,7 @@ with open("output.wav", "wb") as f:
 import requests
 
 class DiaTTSClient:
-    def __init__(self, base_url="http://localhost:8000"):
+    def __init__(self, base_url="http://localhost:7860"):
         self.base_url = base_url
     
     def generate_speech(self, text, voice="alloy"):
@@ -212,7 +212,7 @@ const FormData = require('form-data');
 const fs = require('fs');
 
 class DiaTTSClient {
-    constructor(baseUrl = 'http://localhost:8000') {
+    constructor(baseUrl = 'http://localhost:7860') {
         this.baseUrl = baseUrl;
     }
     
@@ -248,7 +248,7 @@ class DiaTTSClient {
 
 ### Health Check
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:7860/health
 ```
 
 ### Logs
