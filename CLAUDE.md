@@ -30,9 +30,20 @@ python app.py
 python cli.py "your text here" --output output.wav
 
 # FastAPI Server (SillyTavern compatible)
-python fastapi_server.py
-# With custom host/port: python fastapi_server.py --host 0.0.0.0 --port 8000
-# Development mode: python fastapi_server.py --reload
+# Simple startup with environment check
+python start_server.py
+
+# Development mode (debug + save outputs + prompts + reload)
+python start_server.py --dev
+
+# Production mode (optimized for deployment)
+python start_server.py --production
+
+# Custom configuration
+python start_server.py --debug --save-outputs --workers 8 --retention-hours 48
+
+# Direct server launch (without startup script)
+python fastapi_server.py --debug --save-outputs --port 7860
 ```
 
 ### Code Quality
@@ -119,13 +130,22 @@ model = Dia.from_pretrained("nari-labs/Dia-1.6B", device=torch.device("cuda:0"))
 
 ## FastAPI Server (SillyTavern Integration)
 
-The `fastapi_server.py` provides OpenAI-compatible TTS API endpoints for integration with SillyTavern and other applications.
+The `fastapi_server.py` provides OpenAI-compatible TTS API with advanced features including worker queues, voice cloning, and job management.
+
+### Core Features
+- **Worker Queue System** - Concurrent processing with up to 4 workers
+- **Sync/Async Processing** - Choose immediate response or job-based processing
+- **Voice Cloning** - Upload audio samples for custom voices
+- **Model Parameters** - Full control over generation settings
+- **Debug Logging** - Comprehensive monitoring and file management
 
 ### Key Endpoints
-- `POST /v1/audio/speech` - Main TTS generation (OpenAI compatible)
-- `GET /v1/voices` - List available voices
-- `POST /api/tts/generate` - Alternative TTS endpoint (SillyTavern-Extras style)
-- `GET /health` - Server health check
+- `POST /generate` - Main TTS generation (sync/async modes)
+- `GET /models` - List available models
+- `GET /voices` - List available voices
+- `GET /jobs` - Job queue management
+- `GET /config` - Server configuration
+- `POST /audio_prompts/upload` - Upload voice samples
 
 ### SillyTavern Configuration
 
@@ -133,24 +153,31 @@ The `fastapi_server.py` provides OpenAI-compatible TTS API endpoints for integra
 
 1. **Start the FastAPI Server:**
    ```bash
-   python fastapi_server.py
-   # Or with custom settings:
-   python fastapi_server.py --host 0.0.0.0 --port 8000
+   # Recommended: Use startup script with environment check
+   python start_server.py
+   
+   # Development mode with full features
+   python start_server.py --dev
+   
+   # Production mode
+   python start_server.py --production
+   
+   # Custom configuration
+   python start_server.py --debug --save-outputs --workers 6
    ```
 
 2. **Configure SillyTavern:**
    - Navigate to Settings → Text-to-Speech
-   - Set TTS Provider: **OpenAI Compatible**
-   - Model: **dia** (or tts-1, tts-1-hd)
-   - API Key: **sk-anything** (any value starting with "sk-")
-   - Endpoint URL: **http://localhost:7860/v1/audio/speech**
+   - Set TTS Provider: **Custom**
+   - Endpoint URL: **http://localhost:7860/generate**
    - Voice: Choose from alloy, echo, fable, nova, onyx, shimmer
 
-3. **Available Endpoints:**
-   - `GET /v1/models` - List available models
-   - `POST /v1/audio/speech` - Main TTS endpoint
-   - `GET /v1/voices` - List available voices
-   - `GET /health` - Server health check
+3. **Available Features:**
+   - **Synchronous TTS** - Immediate audio response
+   - **Asynchronous TTS** - Job-based processing for concurrent requests
+   - **Custom Voices** - Upload audio samples for voice cloning
+   - **Model Parameters** - Configure temperature, cfg_scale, top_p
+   - **Queue Monitoring** - Track job status and worker utilization
 
 **Troubleshooting:**
 - Ensure HF_TOKEN environment variable is set
@@ -163,14 +190,14 @@ The FastAPI server supports custom voice creation through audio prompts:
 
 ### Upload Audio Prompt
 ```bash
-curl -X POST "http://localhost:7860/v1/audio_prompts/upload" \
+curl -X POST "http://localhost:7860/audio_prompts/upload" \
   -F "prompt_id=my_voice" \
   -F "audio_file=@voice_sample.wav"
 ```
 
 ### Create Custom Voice Mapping
 ```bash
-curl -X POST "http://localhost:7860/v1/voice_mappings" \
+curl -X POST "http://localhost:7860/voice_mappings" \
   -H "Content-Type: application/json" \
   -d '{
     "voice_id": "custom_voice",
@@ -181,13 +208,13 @@ curl -X POST "http://localhost:7860/v1/voice_mappings" \
 ```
 
 ### Voice Management Endpoints
-- `GET /v1/voice_mappings` - List all voice configurations
-- `PUT /v1/voice_mappings/{voice_id}` - Update voice configuration
-- `POST /v1/voice_mappings` - Create new voice mapping
-- `DELETE /v1/voice_mappings/{voice_id}` - Delete custom voice
-- `POST /v1/audio_prompts/upload` - Upload audio prompt file
-- `GET /v1/audio_prompts` - List uploaded audio prompts
-- `DELETE /v1/audio_prompts/{prompt_id}` - Delete audio prompt
+- `GET /voice_mappings` - List all voice configurations
+- `PUT /voice_mappings/{voice_id}` - Update voice configuration
+- `POST /voice_mappings` - Create new voice mapping
+- `DELETE /voice_mappings/{voice_id}` - Delete custom voice
+- `POST /audio_prompts/upload` - Upload audio prompt file
+- `GET /audio_prompts` - List uploaded audio prompts
+- `DELETE /audio_prompts/{prompt_id}` - Delete audio prompt
 
 ### Audio Prompt Requirements
 - Supported formats: WAV, MP3, M4A, etc.
@@ -199,9 +226,30 @@ curl -X POST "http://localhost:7860/v1/voice_mappings" \
 
 The FastAPI server includes comprehensive logging and debugging capabilities:
 
-### Command Line Options
+### Startup Script Options
 ```bash
-# Enable debug mode with file saving
+# Basic startup with environment check
+python start_server.py
+
+# Development mode (enables debug, save outputs, show prompts, reload)
+python start_server.py --dev
+
+# Production mode (optimized settings)
+python start_server.py --production
+
+# Custom configuration
+python start_server.py --debug --save-outputs --show-prompts --workers 8
+
+# Performance tuning
+python start_server.py --workers 6 --no-torch-compile --retention-hours 48
+
+# Environment check only
+python start_server.py --check-only
+```
+
+### Direct Server Options
+```bash
+# Direct server launch (bypass startup script)
 python fastapi_server.py --debug --save-outputs --show-prompts
 
 # Custom retention period
@@ -214,10 +262,10 @@ python fastapi_server.py --debug --save-outputs --show-prompts --reload
 ### Configuration API
 ```bash
 # Get current configuration
-curl http://localhost:7860/v1/config
+curl http://localhost:7860/config
 
 # Update configuration
-curl -X PUT "http://localhost:7860/v1/config" \
+curl -X PUT "http://localhost:7860/config" \
   -H "Content-Type: application/json" \
   -d '{
     "debug_mode": true,
@@ -230,22 +278,22 @@ curl -X PUT "http://localhost:7860/v1/config" \
 ### Generation Logs API
 ```bash
 # Get recent generation logs
-curl http://localhost:7860/v1/logs
+curl http://localhost:7860/logs
 
 # Get logs for specific voice
-curl "http://localhost:7860/v1/logs?voice=alloy&limit=10"
+curl "http://localhost:7860/logs?voice=alloy&limit=10"
 
 # Get specific log details
-curl http://localhost:7860/v1/logs/{log_id}
+curl http://localhost:7860/logs/{log_id}
 
 # Download generated audio file
-curl http://localhost:7860/v1/logs/{log_id}/download -o output.wav
+curl http://localhost:7860/logs/{log_id}/download -o output.wav
 
 # Clear all logs
-curl -X DELETE http://localhost:7860/v1/logs
+curl -X DELETE http://localhost:7860/logs
 
 # Manual cleanup of old files
-curl -X POST http://localhost:7860/v1/cleanup
+curl -X POST http://localhost:7860/cleanup
 ```
 
 ### Features
@@ -255,22 +303,85 @@ curl -X POST http://localhost:7860/v1/cleanup
 - **Automatic Cleanup**: Removes files older than retention period (default 24h)
 - **Debug Headers**: Includes generation ID in response headers
 - **Voice Tracking**: Logs which voice and audio prompts were used
+- **Job Queue Monitoring**: Track async jobs and worker status
+- **Worker Pool Management**: Concurrent processing with configurable workers
 
-### Voice Mapping
-The server maps common voice names to Dia's speaker system:
-- `alloy`, `nova`, `shimmer` → Primarily use [S1] speaker
-- `echo`, `fable`, `onyx` → Primarily use [S2] speaker
+## Worker Queue System
+
+The FastAPI server includes a built-in worker queue for handling concurrent TTS requests:
+
+### Queue Features
+- **Concurrent Processing**: Up to 4 workers process jobs simultaneously
+- **Job Status Tracking**: Monitor jobs from pending → processing → completed
+- **Automatic Cleanup**: Jobs cleaned up after 1 hour
+- **Result Storage**: Audio results temporarily stored in memory
+- **Worker Monitoring**: Track active workers and queue statistics
+
+### Processing Modes
+```bash
+# Synchronous (immediate response)
+curl -X POST "http://localhost:7860/generate" \
+  -d '{"text": "Hello!", "voice_id": "alloy"}' \
+  --output speech.wav
+
+# Asynchronous (job-based)
+curl -X POST "http://localhost:7860/generate?async_mode=true" \
+  -d '{"text": "Hello!", "voice_id": "alloy"}'
+```
+
+### Queue Management
+```bash
+# Get queue statistics
+curl "http://localhost:7860/queue/stats"
+
+# List all jobs
+curl "http://localhost:7860/jobs"
+
+# Check specific job status
+curl "http://localhost:7860/jobs/{job_id}"
+
+# Download completed job result
+curl "http://localhost:7860/jobs/{job_id}/result" -o result.wav
+
+# Cancel pending job
+curl -X DELETE "http://localhost:7860/jobs/{job_id}"
+```
+
+## API Features Summary
+
+### Voice Management
+- **Built-in Voices**: alloy, echo, fable, nova, onyx, shimmer
+- **Custom Voices**: Upload audio samples for voice cloning
+- **Voice Mapping**: Configure speaker assignments and styles
+- **Audio Prompts**: 0.5-60 seconds, auto-resampled to 44.1kHz
+
+### Model Parameters
+- **temperature** (0.1-2.0): Controls randomness and creativity
+- **cfg_scale** (1.0-10.0): Classifier-free guidance strength
+- **top_p** (0.0-1.0): Nucleus sampling threshold
+- **max_tokens** (100-10000): Maximum generation length
+- **use_torch_compile** (boolean): Enable compilation optimization
 
 ### API Request Format
 ```json
 {
   "model": "dia",
-  "input": "Text to convert to speech",
+  "input": "[S1] Text to convert to speech",
   "voice": "alloy",
   "response_format": "wav",
-  "speed": 1.0
+  "speed": 1.0,
+  "temperature": 1.2,
+  "cfg_scale": 3.0,
+  "top_p": 0.95
 }
 ```
+
+### Performance & Scaling
+- **Concurrent Workers**: 4 worker threads by default
+- **Queue Management**: Job-based async processing
+- **Memory Efficient**: Shared model instance across workers
+- **Auto-cleanup**: Jobs and files removed automatically
+- **Monitoring**: Full visibility into queue and worker status
 
 ## Docker Support
 
