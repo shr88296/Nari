@@ -60,6 +60,7 @@ def run_inference(
     top_p: float,
     cfg_filter_top_k: int,
     speed_factor: float,
+    seed_input: int,
 ):
     """
     Runs Nari inference using the globally loaded model and provided inputs.
@@ -128,8 +129,18 @@ def run_inference(
         # 3. Run Generation
 
         start_time = time.time()
-
         # Use torch.inference_mode() context manager for the generation call
+        # Set seed for voice consistency
+        # Handle empty/None seed input
+        if seed_input is None or seed_input == "":
+            import random
+            seed_value = random.randint(0, 999999)
+            print(f"No seed provided, using random seed: {seed_value}")
+        else:
+            seed_value = int(seed_input)
+            print(f"Using provided seed: {seed_value}")
+        
+        torch.manual_seed(seed_value)
         with torch.inference_mode():
             output_audio_np = model.generate(
                 text_input,
@@ -295,6 +306,31 @@ with gr.Blocks(css=css) as demo:
                     step=0.02,
                     info="Adjusts the speed of the generated audio (1.0 = original speed).",
                 )
+                with gr.Row():
+                    seed_input = gr.Number(
+                        label="Seed (for voice consistency)",
+                        value=42,
+                        info="Same seed = same voice. Change for different voices.",
+                        minimum=0,
+                        maximum=999999,
+                        step=1,
+                        scale=3
+                    )
+                    random_seed_btn = gr.Button("🎲 Random", scale=1, size="sm")
+                
+                # Random seed function - only if field is empty
+                def generate_random_seed(current_seed):
+                    import random
+                    if current_seed is None or current_seed == "":
+                        return random.randint(0, 999999)
+                    else:
+                        return current_seed  # Keep existing value if not empty
+                
+                random_seed_btn.click(
+                    fn=generate_random_seed,
+                    inputs=[seed_input],  # Pass current value as input
+                    outputs=[seed_input]
+                )
 
             run_button = gr.Button("Generate Audio", variant="primary")
 
@@ -317,6 +353,7 @@ with gr.Blocks(css=css) as demo:
             top_p,
             cfg_filter_top_k,
             speed_factor_slider,
+            seed_input,
         ],
         outputs=[audio_output],  # Add status_output here if using it
         api_name="generate_audio",
@@ -334,6 +371,8 @@ with gr.Blocks(css=css) as demo:
             0.95,
             35,
             0.94,
+            42,
+            15,
         ],
         [
             "[S1] Open weights text to dialogue model. \n[S2] You get full control over scripts and voices. \n[S1] I'm biased, but I think we clearly won. \n[S2] Hard to disagree. (laughs) \n[S1] Thanks for listening to this demo. \n[S2] Try it now on Git hub and Hugging Face. \n[S1] If you liked our model, please give us a star and share to your friends. \n[S2] This was Nari Labs.",
@@ -344,6 +383,8 @@ with gr.Blocks(css=css) as demo:
             0.95,
             35,
             0.94,
+            42,
+            15,
         ],
     ]
 
@@ -359,6 +400,7 @@ with gr.Blocks(css=css) as demo:
                 top_p,
                 cfg_filter_top_k,
                 speed_factor_slider,
+                seed_input,
             ],
             outputs=[audio_output],
             fn=run_inference,
