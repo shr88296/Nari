@@ -126,7 +126,7 @@ class DiaConfig(BaseModel, frozen=True):
     architectures: list[str] = Field(default_factory=lambda: ["DiaForConditionalGeneration"])
     bos_token_id: int = Field(default=1026)
     decoder_config: DecoderConfig
-    delay_pattern: list[int] = Field(default_factory=lambda: [0,8,9,10,11,12,13,14,15])
+    delay_pattern: list[int] = Field(default_factory=lambda: [0, 8, 9, 10, 11, 12, 13, 14, 15])
     encoder_config: EncoderConfig
     eos_token_id: int = Field(default=1024)
     initializer_range: float = Field(default=0.02)

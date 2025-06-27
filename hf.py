@@ -11,9 +11,7 @@ processor = AutoProcessor.from_pretrained(model_checkpoint)
 inputs = processor(text=text, padding=True, return_tensors="pt").to(torch_device)
 
 model = DiaForConditionalGeneration.from_pretrained(model_checkpoint).to(torch_device)
-outputs = model.generate(
-    **inputs, max_new_tokens=3072, guidance_scale=3.0, temperature=1.8, top_p=0.90, top_k=45
-)
+outputs = model.generate(**inputs, max_new_tokens=3072, guidance_scale=3.0, temperature=1.8, top_p=0.90, top_k=45)
 
 outputs = processor.batch_decode(outputs)
 processor.save_audio(outputs, "example.mp3")
