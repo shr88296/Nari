@@ -7,7 +7,7 @@ text = "[S1] Dia is an open weights text to dialogue model. [S2] You get full co
 
 output = model.generate(
     text,
-    use_torch_compile=True,
+    use_torch_compile=False,
     verbose=True,
     cfg_scale=3.0,
     temperature=1.8,

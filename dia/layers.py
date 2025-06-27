@@ -276,7 +276,6 @@ class CrossAttention(nn.Module):
         original_dtype = Xq.dtype
 
         Xq_BxTxNxH = self.q_proj(Xq)
-        Xq_BxTxNxH = self.rotary_emb(Xq_BxTxNxH, position=q_positions)
         Xq_BxNxTxH = Xq_BxTxNxH.transpose(1, 2)
 
         attn_k: torch.Tensor | None = None
@@ -357,14 +356,12 @@ class SelfAttention(nn.Module):
         num_kv_heads: int,
         head_dim: int,
         compute_dtype: torch.dtype,
-        is_cross_attn: bool = False,
         out_embed_dim: int | None = None,
     ):
         super().__init__()
         self.num_query_heads = num_query_heads
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
-        self.is_cross_attn = is_cross_attn
         self.output_dim = out_embed_dim if out_embed_dim is not None else q_embed_dim
         self.projected_query_dim = num_query_heads * head_dim
         if num_query_heads % num_kv_heads != 0:
@@ -402,8 +399,7 @@ class SelfAttention(nn.Module):
         # --- Rotary Embedding ---
         self.rotary_emb = RotaryEmbedding(
             embedding_dims=self.head_dim,
-            min_timescale=config.model.rope_min_timescale,
-            max_timescale=config.model.rope_max_timescale,
+            max_timescale=config.rope_theta,
             dtype=compute_dtype,
         )
 
@@ -550,14 +546,13 @@ class EncoderLayer(nn.Module):
             dtype=torch.float32,
         )
         self.self_attention = SelfAttention(
-            config,
+            enc_config,
             q_embed_dim=embed_dim,
             kv_embed_dim=embed_dim,
             num_query_heads=enc_config.num_attention_heads,
             num_kv_heads=enc_config.num_key_value_heads,
             head_dim=enc_config.head_dim,
             compute_dtype=compute_dtype,
-            is_cross_attn=False,
             out_embed_dim=embed_dim,
         )
         self.post_sa_norm = RMSNorm(
@@ -661,19 +656,18 @@ class DecoderLayer(nn.Module):
 
         # Self-Attention (GQA) with Causal Masking
         self.self_attention = SelfAttention(
-            config,
+            dec_config,
             q_embed_dim=dec_embed_dim,
             kv_embed_dim=dec_embed_dim,
             num_query_heads=dec_config.num_attention_heads,
             num_kv_heads=dec_config.num_key_value_heads,
             head_dim=dec_config.head_dim,
             compute_dtype=compute_dtype,
-            is_cross_attn=False,
             out_embed_dim=dec_embed_dim,
         )
         # Cross-Attention (MHA)
         self.cross_attention = CrossAttention(
-            config=config,
+            dec_config,
             q_embed_dim=dec_embed_dim,
             kv_embed_dim=enc_embed_dim,  # Note kv_embed_dim
             num_query_heads=dec_config.cross_num_attention_heads,

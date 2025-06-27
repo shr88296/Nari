@@ -1,11 +1,12 @@
 import time
 from enum import Enum
+from typing import Callable
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchaudio
 
-# Assuming these imports are relative to the package structure
 from .audio import apply_audio_delay, build_delay_indices, build_revert_indices, revert_audio_delay
 from .config import DiaConfig
 from .layers import DiaModel
@@ -344,6 +345,7 @@ class Dia:
         text: torch.Tensor,
         audio_prompts: list[torch.Tensor | None],
         max_tokens: int | None = None,
+        attn_fn: Callable = F.scaled_dot_product_attention,
     ):
         """Initializes the model state for generation.
 
