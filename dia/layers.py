@@ -5,7 +5,7 @@ from huggingface_hub import PyTorchModelHubMixin
 from torch import Tensor
 from torch.nn import RMSNorm
 
-from .config import DiaConfig
+from .config import DecoderConfig, DiaConfig, EncoderConfig
 from .state import DecoderInferenceState, EncoderInferenceState, KVCache
 
 
@@ -135,7 +135,7 @@ class Attention(nn.Module):
 
     def __init__(
         self,
-        config: DiaConfig,
+        config: EncoderConfig | DecoderConfig,
         q_embed_dim: int,
         kv_embed_dim: int,
         num_query_heads: int,
@@ -185,8 +185,7 @@ class Attention(nn.Module):
         # --- Rotary Embedding ---
         self.rotary_emb = RotaryEmbedding(
             embedding_dims=self.head_dim,
-            min_timescale=config.model.rope_min_timescale,
-            max_timescale=config.model.rope_max_timescale,
+            max_timescale=config.rope_theta,
             dtype=compute_dtype,
         )
 
@@ -271,22 +270,21 @@ class EncoderLayer(nn.Module):
     def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
-        model_config = config.model
-        enc_config = config.model.encoder
-        embed_dim = enc_config.n_embd
+        enc_config = config.encoder_config
+        embed_dim = enc_config.hidden_size
         self.compute_dtype = compute_dtype
 
         self.pre_sa_norm = RMSNorm(
             embed_dim,
-            eps=model_config.normalization_layer_epsilon,
+            eps=enc_config.norm_eps,
             dtype=torch.float32,
         )
         self.self_attention = Attention(
-            config,
+            enc_config,
             q_embed_dim=embed_dim,
             kv_embed_dim=embed_dim,
-            num_query_heads=enc_config.n_head,
-            num_kv_heads=enc_config.n_head,
+            num_query_heads=enc_config.num_attention_heads,
+            num_kv_heads=enc_config.num_key_value_heads,
             head_dim=enc_config.head_dim,
             compute_dtype=compute_dtype,
             is_cross_attn=False,
@@ -294,12 +292,12 @@ class EncoderLayer(nn.Module):
         )
         self.post_sa_norm = RMSNorm(
             embed_dim,
-            eps=model_config.normalization_layer_epsilon,
+            eps=enc_config.norm_eps,
             dtype=torch.float32,
         )
         self.mlp = MlpBlock(
             embed_dim=embed_dim,
-            intermediate_dim=enc_config.n_hidden,
+            intermediate_dim=enc_config.intermediate_size,
             compute_dtype=compute_dtype,
         )
 
@@ -334,19 +332,18 @@ class Encoder(nn.Module):
     def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
-        model_config = config.model
-        enc_config = config.model.encoder
+        enc_config = config.encoder_config
         self.compute_dtype = compute_dtype
 
         self.embedding = nn.Embedding(
-            model_config.src_vocab_size,
-            enc_config.n_embd,
+            enc_config.vocab_size,
+            enc_config.hidden_size,
             dtype=compute_dtype,
         )
-        self.layers = nn.ModuleList([EncoderLayer(config, compute_dtype) for _ in range(enc_config.n_layer)])
+        self.layers = nn.ModuleList([EncoderLayer(config, compute_dtype) for _ in range(enc_config.num_hidden_layers)])
         self.norm = RMSNorm(
-            enc_config.n_embd,
-            eps=model_config.normalization_layer_epsilon,
+            enc_config.hidden_size,
+            eps=enc_config.norm_eps,
             dtype=torch.float32,
         )
 
@@ -370,49 +367,48 @@ class DecoderLayer(nn.Module):
     def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
-        model_config = config.model
-        dec_config = config.model.decoder
-        enc_config = config.model.encoder
-        dec_embed_dim = dec_config.n_embd
-        enc_embed_dim = enc_config.n_embd
+        dec_config = config.decoder_config
+        enc_config = config.encoder_config
+        dec_embed_dim = dec_config.hidden_size
+        enc_embed_dim = enc_config.hidden_size
         self.compute_dtype = compute_dtype
 
         # Norms
         self.pre_sa_norm = RMSNorm(
             dec_embed_dim,
-            eps=model_config.normalization_layer_epsilon,
+            eps=dec_config.norm_eps,
             dtype=torch.float32,
         )
         self.pre_ca_norm = RMSNorm(
             dec_embed_dim,
-            eps=model_config.normalization_layer_epsilon,
+            eps=dec_config.norm_eps,
             dtype=torch.float32,
         )
         self.pre_mlp_norm = RMSNorm(
             dec_embed_dim,
-            eps=model_config.normalization_layer_epsilon,
+            eps=dec_config.norm_eps,
             dtype=torch.float32,
         )
 
         # Self-Attention (GQA) with Causal Masking
         self.self_attention = Attention(
-            config,
+            dec_config,
             q_embed_dim=dec_embed_dim,
             kv_embed_dim=dec_embed_dim,
-            num_query_heads=dec_config.gqa_query_heads,
-            num_kv_heads=dec_config.kv_heads,
-            head_dim=dec_config.gqa_head_dim,
+            num_query_heads=dec_config.num_attention_heads,
+            num_kv_heads=dec_config.num_key_value_heads,
+            head_dim=dec_config.head_dim,
             compute_dtype=compute_dtype,
             is_cross_attn=False,
             out_embed_dim=dec_embed_dim,
         )
         # Cross-Attention (MHA)
         self.cross_attention = Attention(
-            config=config,
+            dec_config,
             q_embed_dim=dec_embed_dim,
             kv_embed_dim=enc_embed_dim,  # Note kv_embed_dim
-            num_query_heads=dec_config.cross_query_heads,
-            num_kv_heads=dec_config.cross_query_heads,
+            num_query_heads=dec_config.cross_num_attention_heads,
+            num_kv_heads=dec_config.cross_num_key_value_heads,
             head_dim=dec_config.cross_head_dim,
             compute_dtype=compute_dtype,
             is_cross_attn=True,
@@ -421,7 +417,7 @@ class DecoderLayer(nn.Module):
         # MLP
         self.mlp = MlpBlock(
             embed_dim=dec_embed_dim,
-            intermediate_dim=dec_config.n_hidden,
+            intermediate_dim=dec_config.intermediate_size,
             compute_dtype=compute_dtype,
         )
 
@@ -480,15 +476,13 @@ class Decoder(nn.Module):
     def __init__(self, config: DiaConfig, compute_dtype: torch.dtype):
         super().__init__()
         self.config = config
-        model_config = config.model
-        dec_config = config.model.decoder
-        data_config = config.data
-        self.num_channels = data_config.channels
-        self.num_layers = dec_config.n_layer
+        dec_config = config.decoder_config
+        self.num_channels = dec_config.num_channels
+        self.num_layers = dec_config.num_hidden_layers
 
         self.embeddings = nn.ModuleList(
             [
-                nn.Embedding(model_config.tgt_vocab_size, dec_config.n_embd, dtype=compute_dtype)
+                nn.Embedding(dec_config.vocab_size, dec_config.hidden_size, dtype=compute_dtype)
                 for _ in range(self.num_channels)
             ]
         )
@@ -497,14 +491,14 @@ class Decoder(nn.Module):
         )
 
         self.norm = RMSNorm(
-            dec_config.n_embd,
-            eps=model_config.normalization_layer_epsilon,
+            dec_config.hidden_size,
+            eps=dec_config.norm_eps,
             dtype=torch.float32,
         )
 
         self.logits_dense = DenseGeneral(
-            in_shapes=(dec_config.n_embd,),
-            out_features=(self.num_channels, model_config.tgt_vocab_size),
+            in_shapes=(dec_config.hidden_size,),
+            out_features=(self.num_channels, dec_config.vocab_size),
             axis=(-1,),
             weight_dtype=compute_dtype,
         )
