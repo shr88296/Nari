@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 
@@ -45,7 +46,9 @@ class EncoderInferenceState:
         """Creates EtorchrInferenceParams from DiaConfig and a device."""
         device = cond_src.device
 
-        positions = torch.arange(config.encoder_config.max_position_embeddings, dtype=torch.float32, device=device).unsqueeze(0)
+        positions = torch.arange(
+            config.encoder_config.max_position_embeddings, dtype=torch.float32, device=device
+        ).unsqueeze(0)
         padding_mask = (cond_src.squeeze(1) != 0).to(device).repeat_interleave(2, dim=0)
         attn_mask = create_attn_mask(padding_mask, padding_mask, device, is_causal=False)
 
@@ -59,6 +62,9 @@ class EncoderInferenceState:
 
 
 class KVCache(torch.nn.Module):
+    k: torch.Tensor
+    v: torch.Tensor
+
     def __init__(
         self,
         batch_size: int,
@@ -74,7 +80,6 @@ class KVCache(torch.nn.Module):
         v = torch.zeros((2 * batch_size, num_heads, max_len, head_dim), dtype=dtype, device=device) if v is None else v
         super().__init__()
 
-        self.current_idx = torch.tensor(0)
         self.register_buffer("k", k)
         self.register_buffer("v", v)
 
@@ -95,15 +100,12 @@ class KVCache(torch.nn.Module):
         k_out, v_out = self.k, self.v
         k_out[:, :, current_idx, :] = k
         v_out[:, :, current_idx, :] = v
-        # self.current_idx += 1
-        # return self.k[:, :, : self.current_idx, :], self.v[:, :, : self.current_idx, :]
         return self.k, self.v
 
-    def prefill(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def prefill(self, k: torch.Tensor, v: torch.Tensor):
         prefill_len = k.shape[2]
         self.k[:, :, :prefill_len, :] = k
         self.v[:, :, :prefill_len, :] = v
-        self.current_idx = prefill_len - 1
 
 
 @dataclass
@@ -128,10 +130,11 @@ class DecoderInferenceState:
         enc_out: torch.Tensor,
         dec_cross_attn_cache: list[KVCache],
         compute_dtype: torch.dtype,
+        max_generation_length: Optional[int] = None,
     ) -> "DecoderInferenceState":
         """Creates DecoderInferenceParams from DiaConfig and a device."""
         device = enc_out.device
-        max_audio_len = config.decoder_config.max_position_embeddings
+        max_audio_len = max_generation_length or config.decoder_config.max_position_embeddings
         batch_size = enc_out.shape[0] // 2
 
         dec_positions = torch.full((2 * batch_size, 1), fill_value=0, dtype=torch.int32, device=device)

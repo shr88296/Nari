@@ -263,7 +263,7 @@ class Dia:
 
     def _pad_text_input(self, text_tokens: list[torch.Tensor]) -> torch.Tensor:
         """Pads the text input to the maximum length."""
-        text_pad_value = 0 
+        text_pad_value = 0
         max_len = self.config.encoder_config.max_position_embeddings
         batch_size = len(text_tokens)
 
@@ -343,6 +343,7 @@ class Dia:
         self,
         text: torch.Tensor,
         audio_prompts: list[torch.Tensor | None],
+        max_tokens: int | None = None,
     ):
         """Initializes the model state for generation.
 
@@ -373,7 +374,12 @@ class Dia:
 
         dec_cross_attn_cache = self.model.decoder.precompute_cross_attn_cache(encoder_out)
         dec_state = DecoderInferenceState.new(
-            self.config, enc_state, encoder_out, dec_cross_attn_cache, self.compute_dtype
+            self.config,
+            enc_state,
+            encoder_out,
+            dec_cross_attn_cache,
+            self.compute_dtype,
+            max_generation_length=max_tokens,
         )
         prefill, prefill_steps = self._prepare_audio_prompt(audio_prompts)
 
@@ -436,12 +442,12 @@ class Dia:
         mask_BxCxV = mask_BxCxV.scatter(dim=-1, index=top_k_indices_BxCxk, value=False)
         logits_BxCxV = cond_logits_BxCxV.masked_fill(mask_BxCxV, -torch.inf)
 
-        logits_BxCxV[:, audio_eos_value + 1 :] = torch.full_like(
-            logits_BxCxV[:, audio_eos_value + 1 :],
+        logits_BxCxV[:, :, audio_eos_value + 1 :] = torch.full_like(
+            logits_BxCxV[:, :, audio_eos_value + 1 :],
             fill_value=-torch.inf,
         )
-        logits_BxCxV[1:, audio_eos_value:] = torch.full_like(
-            logits_BxCxV[1:, audio_eos_value:],
+        logits_BxCxV[:, 1:, audio_eos_value:] = torch.full_like(
+            logits_BxCxV[:, 1:, audio_eos_value:],
             fill_value=-torch.inf,
         )
 
@@ -563,6 +569,9 @@ class Dia:
         audio, sr = torchaudio.load(audio_path, channels_first=True)  # C, T
         if sr != DEFAULT_SAMPLE_RATE:
             audio = torchaudio.functional.resample(audio, sr, DEFAULT_SAMPLE_RATE)
+        # Convert to mono if stereo
+        if audio.shape[0] > 1:
+            audio = torch.mean(audio, dim=0, keepdim=True)  # Average channels to get mono
         return self._encode(audio.to(self.device))
 
     def save_audio(self, path: str, audio: np.ndarray):
@@ -665,7 +674,7 @@ class Dia:
             text = [self._encode_text(text)]
         text = self._pad_text_input(text)
 
-        dec_state, dec_output = self._prepare_generation(text, audio_prompt)
+        dec_state, dec_output = self._prepare_generation(text, audio_prompt, max_tokens=max_tokens)
         dec_step = min(dec_output.prefill_steps) - 1
         current_idx = torch.tensor([dec_step], device=self.device)
 
