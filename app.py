@@ -41,18 +41,20 @@ print(f"Using device: {device}")
 # Load Nari model and config
 print("Loading Nari model...")
 try:
+    dtype_map = {
+        "cpu": "float32",
+        "mps": "float32",  # Apple M series – better with float32
+        "cuda": "float16",  # NVIDIA – better with float16
+    }
+
+    dtype = dtype_map.get(device.type, "float16")
+    print(f"Using device: {device}, attempting to load model with {dtype}")
     # Step 1: Load model normally
-    model = Dia.from_pretrained(
-        "nari-labs/Dia-1.6B",
-        compute_dtype="float16",
-        device=device
-    )
+    model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype=dtype, device=device)
 
     # Step 2: Apply dynamic quantization
     quantized_model = torch.quantization.quantize_dynamic(
-        model.model,
-        {torch.nn.Linear, torch.nn.LSTM},
-        dtype=torch.qint8
+        model.model, {torch.nn.Linear, torch.nn.LSTM}, dtype=torch.qint8
     )
 
     # Step 3: Dereference the original
@@ -66,6 +68,7 @@ except Exception as e:
     print(f"Error loading Nari model: {e}")
     raise
 
+
 def set_seed(seed: int):
     """Sets the random seed for reproducibility."""
     random.seed(seed)
@@ -77,9 +80,11 @@ def set_seed(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 def count_effective_length(text):
     """Counts effective length treating [S1] and [S2] as single characters."""
     return len(text.replace("[S1]", "¤").replace("[S2]", "¤"))
+
 
 def auto_adjust_chunk_size(text, user_chunk_size):
     """Auto-adjusts chunk size if turbo mode is enabled."""
@@ -120,10 +125,12 @@ def split_by_words_respecting_special_tokens(text, max_effective_chars=64):
 
     return chunks
 
+
 def batch_chunks(chunks, batch_size):
     """Yield successive batches of chunks."""
     for i in range(0, len(chunks), batch_size):
-        yield chunks[i:i + batch_size]
+        yield chunks[i : i + batch_size]
+
 
 def split_lines_greedy(lines, chunk_size):
     """Greedily split lines into chunks of up to chunk_size lines."""
@@ -135,9 +142,22 @@ def split_lines_greedy(lines, chunk_size):
             chunks.append("\n".join(lines[i:]))
             break
         else:
-            chunks.append("\n".join(lines[i:i+chunk_size]))
+            chunks.append("\n".join(lines[i : i + chunk_size]))
             i += chunk_size
     return chunks
+
+
+def set_seed(seed: int):
+    """Sets the random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 
 def run_inference(
     text_input: str,
@@ -223,7 +243,8 @@ def run_inference(
 
             for batch_idx, chunk_batch in enumerate(batch_chunks(chunks, batch_size)):
                 print(
-                    f"Generating batch {batch_idx + 1}/{(len(chunks) + batch_size - 1) // batch_size} with {len(chunk_batch)} chunks...")
+                    f"Generating batch {batch_idx + 1}/{(len(chunks) + batch_size - 1) // batch_size} with {len(chunk_batch)} chunks..."
+                )
 
                 batch_input_text = "\n".join(chunk.strip() for chunk in chunk_batch).strip()
 
@@ -279,7 +300,9 @@ def run_inference(
                     x_resampled = np.linspace(0, original_len - 1, target_len)
                     resampled_audio_np = np.interp(x_resampled, x_original, output_audio_np)
                     output_audio = (output_sr, resampled_audio_np.astype(np.float32))
-                    print(f"Resampled audio from {original_len} to {target_len} samples for {speed_factor:.2f}x speed.")
+                    print(
+                        f"Resampled audio from {original_len} to {target_len} samples for {speed_factor:.2f}x speed."
+                    )
                 else:
                     output_audio = (output_sr, output_audio_np)
                     print(f"Skipping audio speed adjustment (factor: {speed_factor:.2f}).")
@@ -297,6 +320,7 @@ def run_inference(
         except Exception as e:
             print(f"Error during inference: {e}")
             import traceback
+
             traceback.print_exc()
             raise gr.Error(f"Inference failed: {e}")
 
@@ -372,13 +396,13 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                     value=0,
                     precision=0,
                     step=1,
-                    info="If 0, auto-selects chunk size for optimal speed. Otherwise, set number of effective characters per generation chunk."
+                    info="If 0, auto-selects chunk size for optimal speed. Otherwise, set number of effective characters per generation chunk.",
                 )
                 max_new_tokens = gr.Slider(
                     label="Max New Tokens (Audio Length)",
                     minimum=860,
                     maximum=3072,
-                    value=model.config.data.audio_length,  # Use config default if available, else fallback
+                    value=model.config.decoder_config.max_position_embeddings,  # Use config default if available, else fallback
                     step=50,
                     info="Controls the maximum length of the generated audio (more tokens = longer audio).",
                 )
@@ -393,14 +417,14 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 temperature = gr.Slider(
                     label="Temperature (Randomness)",
                     minimum=1.0,
-                    maximum=1.5,
-                    value=1.3,  # Default from inference.py
+                    maximum=2.5,
+                    value=1.8,  # Default from inference.py
                     step=0.05,
                     info="Lower values make the output more deterministic, higher values increase randomness.",
                 )
                 top_p = gr.Slider(
                     label="Top P (Nucleus Sampling)",
-                    minimum=0.80,
+                    minimum=0.70,
                     maximum=1.0,
                     value=0.95,  # Default from inference.py
                     step=0.01,
@@ -409,8 +433,8 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 cfg_filter_top_k = gr.Slider(
                     label="CFG Filter Top K",
                     minimum=15,
-                    maximum=50,
-                    value=30,
+                    maximum=100,
+                    value=45,
                     step=1,
                     info="Top k filter for CFG guidance.",
                 )
@@ -418,7 +442,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                     label="Speed Factor",
                     minimum=0.8,
                     maximum=1.0,
-                    value=0.94,
+                    value=1.0,
                     step=0.02,
                     info="Adjusts the speed of the generated audio (1.0 = original speed).",
                 )
@@ -439,13 +463,8 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 type="numpy",
                 autoplay=False,
             )
-            seed_output = gr.Textbox(
-                label="Generation Seed",
-                interactive=False
-            )
-            console_output = gr.Textbox(
-                label="Console Output Log", lines=10, interactive=False
-            )
+            seed_output = gr.Textbox(label="Generation Seed", interactive=False)
+            console_output = gr.Textbox(label="Console Output Log", lines=10, interactive=False)
 
     # Link button click to function
     run_button.click(
@@ -467,7 +486,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
             audio_output,
             seed_output,
             console_output,
-                 ],  # Add status_output here if using it
+        ],  # Add status_output here if using it
         api_name="generate_audio",
     )
 
@@ -479,7 +498,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
             None,
             3072,
             3.0,
-            1.3,
+            1.8,
             0.95,
             35,
             0.94,
@@ -491,7 +510,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
             example_prompt_path if Path(example_prompt_path).exists() else None,
             3072,
             3.0,
-            1.3,
+            1.8,
             0.95,
             35,
             0.94,
