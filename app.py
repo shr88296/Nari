@@ -1,9 +1,9 @@
 import argparse
+import contextlib
+import io
+import random
 import tempfile
 import time
-import random
-import io
-import contextlib
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -40,11 +40,19 @@ print(f"Using device: {device}")
 # Load Nari model and config
 print("Loading Nari model...")
 try:
-    # Use the function from inference.py
-    model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16", device=device)
+    dtype_map = {
+        "cpu": "float32",
+        "mps": "float32",  # Apple M series – better with float32
+        "cuda": "float16",  # NVIDIA – better with float16
+    }
+
+    dtype = dtype_map.get(device.type, "float16")
+    print(f"Using device: {device}, attempting to load model with {dtype}")
+    model = Dia.from_pretrained("nari-labs/Dia-1.6B-0626", compute_dtype=dtype, device=device)
 except Exception as e:
     print(f"Error loading Nari model: {e}")
     raise
+
 
 def set_seed(seed: int):
     """Sets the random seed for reproducibility."""
@@ -56,6 +64,7 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
 
 def run_inference(
     text_input: str,
@@ -87,7 +96,6 @@ def run_inference(
 
         if not text_input or text_input.isspace():
             raise gr.Error("Text input cannot be empty.")
-
 
         # Preprocess Audio
         temp_txt_file_path = None
@@ -145,17 +153,16 @@ def run_inference(
                             print(f"Error writing temporary audio file: {write_e}")
                             raise gr.Error(f"Failed to save audio prompt: {write_e}")
 
-
             # Set and Display Generation Seed
             if seed is None or seed < 0:
-                seed = random.randint(0, 2 ** 32 - 1)
+                seed = random.randint(0, 2**32 - 1)
                 print(f"\nNo seed provided, generated random seed: {seed}\n")
             else:
                 print(f"\nUsing user-selected seed: {seed}\n")
             set_seed(seed)
 
             # Run Generation
-            print(f"Generating speech: \n\"{text_input}\"\n")
+            print(f'Generating speech: \n"{text_input}"\n')
 
             start_time = time.time()
 
@@ -170,6 +177,7 @@ def run_inference(
                     cfg_filter_top_k=cfg_filter_top_k,  # Pass the value here
                     use_torch_compile=False,  # Keep False for Gradio stability
                     audio_prompt=prompt_path_for_generate,
+                    verbose=True,
                 )
 
             end_time = time.time()
@@ -193,7 +201,9 @@ def run_inference(
                         output_sr,
                         resampled_audio_np.astype(np.float32),
                     )  # Use resampled audio
-                    print(f"Resampled audio from {original_len} to {target_len} samples for {speed_factor:.2f}x speed.")
+                    print(
+                        f"Resampled audio from {original_len} to {target_len} samples for {speed_factor:.2f}x speed."
+                    )
                 else:
                     output_audio = (
                         output_sr,
@@ -291,7 +301,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                     label="Max New Tokens (Audio Length)",
                     minimum=860,
                     maximum=3072,
-                    value=model.config.data.audio_length,  # Use config default if available, else fallback
+                    value=model.config.decoder_config.max_position_embeddings,  # Use config default if available, else fallback
                     step=50,
                     info="Controls the maximum length of the generated audio (more tokens = longer audio).",
                 )
@@ -306,14 +316,14 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 temperature = gr.Slider(
                     label="Temperature (Randomness)",
                     minimum=1.0,
-                    maximum=1.5,
-                    value=1.3,  # Default from inference.py
+                    maximum=2.5,
+                    value=1.8,  # Default from inference.py
                     step=0.05,
                     info="Lower values make the output more deterministic, higher values increase randomness.",
                 )
                 top_p = gr.Slider(
                     label="Top P (Nucleus Sampling)",
-                    minimum=0.80,
+                    minimum=0.70,
                     maximum=1.0,
                     value=0.95,  # Default from inference.py
                     step=0.01,
@@ -322,8 +332,8 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 cfg_filter_top_k = gr.Slider(
                     label="CFG Filter Top K",
                     minimum=15,
-                    maximum=50,
-                    value=30,
+                    maximum=100,
+                    value=45,
                     step=1,
                     info="Top k filter for CFG guidance.",
                 )
@@ -331,7 +341,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                     label="Speed Factor",
                     minimum=0.8,
                     maximum=1.0,
-                    value=0.94,
+                    value=1.0,
                     step=0.02,
                     info="Adjusts the speed of the generated audio (1.0 = original speed).",
                 )
@@ -352,13 +362,8 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
                 type="numpy",
                 autoplay=False,
             )
-            seed_output = gr.Textbox(
-                label="Generation Seed",
-                interactive=False
-            )
-            console_output = gr.Textbox(
-                label="Console Output Log", lines=10, interactive=False
-            )
+            seed_output = gr.Textbox(label="Generation Seed", interactive=False)
+            console_output = gr.Textbox(label="Console Output Log", lines=10, interactive=False)
 
     # Link button click to function
     run_button.click(
@@ -379,7 +384,7 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
             audio_output,
             seed_output,
             console_output,
-                 ],  # Add status_output here if using it
+        ],  # Add status_output here if using it
         api_name="generate_audio",
     )
 
@@ -391,20 +396,20 @@ with gr.Blocks(css=css, theme="gradio/dark") as demo:
             None,
             3072,
             3.0,
-            1.3,
+            1.8,
             0.95,
-            35,
-            0.94,
+            45,
+            1.0,
         ],
         [
             "[S1] Open weights text to dialogue model. \n[S2] You get full control over scripts and voices. \n[S1] I'm biased, but I think we clearly won. \n[S2] Hard to disagree. (laughs) \n[S1] Thanks for listening to this demo. \n[S2] Try it now on Git hub and Hugging Face. \n[S1] If you liked our model, please give us a star and share to your friends. \n[S2] This was Nari Labs.",
             example_prompt_path if Path(example_prompt_path).exists() else None,
             3072,
             3.0,
-            1.3,
+            1.8,
             0.95,
-            35,
-            0.94,
+            45,
+            1.0,
         ],
     ]
 
