@@ -643,19 +643,21 @@ class Dia:
         invalid_mask = (codebook < min_valid_index) | (codebook > max_valid_index)
         codebook[invalid_mask] = 0
 
-        # Decode the entire chunk (overlap + new data)
-        audio = self._decode(codebook[0, : seq_length - max_delay_pattern, :])
+        codebook_length = codebook.shape[1]
+        if codebook_length == 0:
+            return np.array([])
+
+        audio = self._decode(codebook[0, :codebook_length, :])
         audio_np = audio.cpu().numpy()
 
-        # Crop the audio to remove the overlap part
         if overlap > 0:
-            num_reverted_tokens = codebook.shape[1]
-            if num_reverted_tokens > 0:
-                samples_per_token = len(audio_np) / num_reverted_tokens
-                skip_samples = int(overlap * samples_per_token)
+            # Use the fixed sample rate ratio for precise, sample-perfect cropping
+            skip_samples = overlap * SAMPLE_RATE_RATIO
+            if skip_samples < len(audio_np):
                 return audio_np[skip_samples:]
             else:
-                return np.array([])  # Return empty if no tokens
+                # This can happen if the overlap is larger than the generated chunk
+                return np.array([])
 
         return audio_np
 
@@ -669,7 +671,8 @@ class Dia:
         top_p: float = 0.95,
         use_torch_compile: bool = False,
         cfg_filter_top_k: int = 45,
-        audio_prompt: str | torch.Tensor | None = None,
+        audio_prompt: list[str | torch.Tensor | None] | str | torch.Tensor | None = None,
+        audio_prompt_path: list[str | torch.Tensor | None] | str | torch.Tensor | None = None,
         chunk_size: int = 512,
         overlap: int = 64,
         verbose: bool = False,
@@ -710,107 +713,159 @@ class Dia:
         delay_pattern_Cx = torch.tensor(delay_pattern, device=self.device, dtype=torch.long)
         self.model.eval()
 
+        if audio_prompt_path:
+            print("Warning: audio_prompt_path is deprecated. Use audio_prompt instead.")
+            audio_prompt = audio_prompt_path
+
+        if verbose:
+            total_start_time = time.time()
+
         if use_torch_compile and not hasattr(self, "_compiled"):
             self._prepare_generation = torch.compile(self._prepare_generation, dynamic=True, fullgraph=True)
             self._decoder_step = torch.compile(self._decoder_step, fullgraph=True, mode="max-autotune")
             self._compiled = True
 
-        if isinstance(audio_prompt, str):
-            audio_prompt = self.load_audio(audio_prompt)
+        if isinstance(audio_prompt, list):
+            audio_prompt = [self.load_audio(p) if isinstance(p, str) else p for p in audio_prompt]
+        elif isinstance(audio_prompt, str):
+            audio_prompt = [self.load_audio(audio_prompt)]
+        elif isinstance(audio_prompt, torch.Tensor):
+            audio_prompt = [audio_prompt]
+        elif audio_prompt is None:
+            audio_prompt = [None] * batch_size
+
+        assert isinstance(audio_prompt, list), "audio_prompt must be a list of tensors or None"
+        assert len(audio_prompt) == batch_size, "Number of audio prompts must match batch size"
 
         text_tokens = self._encode_text(text)
         text_padded = self._pad_text_input([text_tokens])
 
-        dec_state, dec_output = self._prepare_generation(text_padded, [audio_prompt], max_tokens=max_tokens)
+        dec_state, dec_output = self._prepare_generation(text_padded, audio_prompt, max_tokens=max_tokens)
         dec_step = min(dec_output.prefill_steps) - 1
         current_idx = torch.tensor([dec_step], device=self.device)
 
-        eos_detected = torch.zeros((batch_size,), dtype=torch.bool, device=self.device)
-        eos_countdown = torch.full((batch_size,), -1, dtype=torch.long, device=self.device)
+        eos_detected_Bx = torch.zeros((batch_size,), dtype=torch.bool, device=self.device)
+        eos_countdown_Bx = torch.full((batch_size,), -1, dtype=torch.long, device=self.device)
+        finished_step_Bx = torch.full((batch_size,), -1, dtype=torch.long, device=self.device)
 
-        all_generated_tokens = []
-        if dec_step > 0:
-            # Include prefill tokens for context
-            prefill_tokens = dec_output.generated_tokens[0, : dec_step + 1, :]
-            all_generated_tokens.append(prefill_tokens)
+        bos_over = False
+        # Simplified: no overlap for now, just focus on getting chunks right
+        last_yield_step = dec_step
 
-        token_buffer = []
+        if verbose:
+            print("generate: starting generation loop")
+            if use_torch_compile:
+                print("generate: using use_torch_compile=True, the first step may be slow")
+            start_time = time.time()
 
+        # --- Generation Loop ---
         while dec_step < max_tokens:
-            if (eos_countdown == 0).all():
+            if (eos_countdown_Bx == 0).all():
                 break
 
             current_step_idx = dec_step + 1
+            torch.compiler.cudagraph_mark_step_begin()
             dec_state.prepare_step(dec_step)
             tokens_Bx1xC = dec_output.get_tokens_at(dec_step).repeat_interleave(2, dim=0)
 
             pred_BxC = self._decoder_step(
-                tokens_Bx1xC, dec_state, cfg_scale, temperature, top_p, cfg_filter_top_k, current_idx
+                tokens_Bx1xC,
+                dec_state,
+                cfg_scale,
+                temperature,
+                top_p,
+                cfg_filter_top_k,
+                current_idx,
             )
             current_idx += 1
 
-            token_buffer.append(pred_BxC.squeeze(0))
+            active_mask_Bx = eos_countdown_Bx != 0
+            eos_trigger_Bx = torch.zeros_like(active_mask_Bx)
+            if active_mask_Bx.any():
+                is_eos_token = (~eos_detected_Bx[active_mask_Bx]) & (pred_BxC[active_mask_Bx, 0] == audio_eos_value)
+                is_max_len = current_step_idx >= max_tokens - max_delay_pattern
+                eos_trigger_Bx[active_mask_Bx] = is_eos_token | is_max_len
+            eos_detected_Bx |= eos_trigger_Bx
+            start_countdown_mask_Bx = eos_trigger_Bx & (eos_countdown_Bx < 0)
+            if start_countdown_mask_Bx.any():
+                eos_countdown_Bx[start_countdown_mask_Bx] = max_delay_pattern
+                finished_step_Bx[start_countdown_mask_Bx] = current_step_idx
 
-            if len(token_buffer) >= chunk_size:
-                chunk_tokens = torch.stack(token_buffer, dim=0)
+            padding_mask_Bx = eos_countdown_Bx > 0
+            if padding_mask_Bx.any():
+                pred_active_BxC = pred_BxC[padding_mask_Bx].clone()
+                countdown_active_Bx = eos_countdown_Bx[padding_mask_Bx]
+                step_after_eos_Bx = max_delay_pattern - countdown_active_Bx
+                step_after_eos_Bx_ = step_after_eos_Bx.unsqueeze(1)
+                delay_pattern_Cx_ = delay_pattern_Cx.unsqueeze(0)
+                eos_mask_NxC = step_after_eos_Bx_ == delay_pattern_Cx_
+                pad_mask_NxC = step_after_eos_Bx_ > delay_pattern_Cx_
+                pred_active_BxC[eos_mask_NxC] = audio_eos_value
+                pred_active_BxC[pad_mask_NxC] = audio_pad_value
+                pred_BxC[padding_mask_Bx] = pred_active_BxC
+                eos_countdown_Bx[padding_mask_Bx] -= 1
 
-                tokens_to_process = chunk_tokens
-                current_overlap = 0
-                if len(all_generated_tokens) > 0:
-                    previous_tokens = torch.cat(all_generated_tokens, dim=0)
-                    if previous_tokens.shape[0] >= overlap:
-                        overlap_tokens = previous_tokens[-overlap:]
-                        tokens_to_process = torch.cat([overlap_tokens, chunk_tokens], dim=0)
-                        current_overlap = overlap
+            # --- Update BOS flag (Original) ---
+            if not bos_over:
+                bos_over = all(
+                    dec_step - prefill_step > max_delay_pattern for prefill_step in dec_output.prefill_steps
+                )
 
-                audio_chunk = self._process_audio_chunk(tokens_to_process, current_overlap)
+            dec_output.update_one(pred_BxC, current_step_idx, not bos_over)
+
+            dec_step += 1
+
+            # Check if we have enough new tokens to yield a chunk
+            if current_step_idx - last_yield_step >= chunk_size:
+                # Get the tokens for this chunk (no overlap, just the new tokens)
+                tokens_to_process = dec_output.generated_tokens[0, last_yield_step:current_step_idx, :]
+
+                # Create output buffer following the same pattern as generate()
+                chunk_len = tokens_to_process.shape[0]
+                num_channels = self.config.decoder_config.num_channels
+                generated_codes = torch.full(
+                    (batch_size, chunk_len, num_channels),
+                    fill_value=audio_pad_value,
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                generated_codes[0, :chunk_len, :] = tokens_to_process
+
+                # Calculate length (all tokens are valid for this chunk)
+                lengths_Bx = torch.tensor([chunk_len], device=self.device)
+
+                # Use the same function as non-streaming
+                audio_chunks = self._generate_output(generated_codes, lengths_Bx)
+                audio_chunk = audio_chunks[0]  # Extract single item
+
                 if audio_chunk.size > 0:
                     yield audio_chunk
 
-                all_generated_tokens.append(chunk_tokens)
-                token_buffer = []
+                last_yield_step = current_step_idx
 
-            # EOS handling for the single item in the batch
-            active_mask = eos_countdown != 0
-            if active_mask.any():
-                is_eos_token = (~eos_detected[active_mask]) & (pred_BxC[active_mask, 0] == audio_eos_value)
-                is_max_len = current_step_idx >= max_tokens - max_delay_pattern
-                eos_trigger = is_eos_token | is_max_len
-                eos_detected |= eos_trigger
-                start_countdown_mask = eos_trigger & (eos_countdown < 0)
-                if start_countdown_mask.any():
-                    eos_countdown[start_countdown_mask] = max_delay_pattern
+        # Process any remaining tokens after the loop finishes
+        if current_step_idx > last_yield_step:
+            # Get the remaining tokens (no overlap, just the new tokens)
+            tokens_to_process = dec_output.generated_tokens[0, last_yield_step:current_step_idx, :]
 
-            padding_mask = eos_countdown > 0
-            if padding_mask.any():
-                pred_active_BxC = pred_BxC[padding_mask].clone()
-                countdown_active = eos_countdown[padding_mask]
-                step_after_eos = max_delay_pattern - countdown_active
-                step_after_eos_ = step_after_eos.unsqueeze(1)
-                delay_pattern_Cx_ = delay_pattern_Cx.unsqueeze(0)
-                eos_mask_NxC = step_after_eos_ == delay_pattern_Cx_
-                pad_mask_NxC = step_after_eos_ > delay_pattern_Cx_
-                pred_active_BxC[eos_mask_NxC] = audio_eos_value
-                pred_active_BxC[pad_mask_NxC] = audio_pad_value
-                pred_BxC[padding_mask] = pred_active_BxC
-                eos_countdown[padding_mask] -= 1
+            # Create output buffer following the same pattern as generate()
+            chunk_len = tokens_to_process.shape[0]
+            num_channels = self.config.decoder_config.num_channels
+            generated_codes = torch.full(
+                (batch_size, chunk_len, num_channels),
+                fill_value=audio_pad_value,
+                dtype=torch.long,
+                device=self.device,
+            )
+            generated_codes[0, :chunk_len, :] = tokens_to_process
 
-            dec_output.update_one(pred_BxC, current_step_idx, False)
-            dec_step += 1
+            # Calculate length (all tokens are valid for this chunk)
+            lengths_Bx = torch.tensor([chunk_len], device=self.device)
 
-        # Process any remaining tokens in the buffer
-        if token_buffer:
-            chunk_tokens = torch.stack(token_buffer, dim=0)
-            tokens_to_process = chunk_tokens
-            current_overlap = 0
-            if len(all_generated_tokens) > 0:
-                previous_tokens = torch.cat(all_generated_tokens, dim=0)
-                if previous_tokens.shape[0] >= overlap:
-                    overlap_tokens = previous_tokens[-overlap:]
-                    tokens_to_process = torch.cat([overlap_tokens, chunk_tokens], dim=0)
-                    current_overlap = overlap
+            # Use the same function as non-streaming
+            audio_chunks = self._generate_output(generated_codes, lengths_Bx)
+            audio_chunk = audio_chunks[0]  # Extract single item
 
-            audio_chunk = self._process_audio_chunk(tokens_to_process, current_overlap)
             if audio_chunk.size > 0:
                 yield audio_chunk
 
