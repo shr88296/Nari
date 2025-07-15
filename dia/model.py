@@ -608,7 +608,6 @@ class Dia:
         audio_prompt: list[str | torch.Tensor | None] | str | torch.Tensor | None = None,
         audio_prompt_path: list[str | torch.Tensor | None] | str | torch.Tensor | None = None,
         chunk_size: int = 512,
-        overlap: int = 64,
         verbose: bool = False,
     ) -> Generator[np.ndarray, None, None]:
         """Generates audio from a text prompt in a streaming fashion.
@@ -650,9 +649,6 @@ class Dia:
         if audio_prompt_path:
             print("Warning: audio_prompt_path is deprecated. Use audio_prompt instead.")
             audio_prompt = audio_prompt_path
-
-        if verbose:
-            total_start_time = time.time()
 
         if use_torch_compile and not hasattr(self, "_compiled"):
             self._prepare_generation = torch.compile(self._prepare_generation, dynamic=True, fullgraph=True)
