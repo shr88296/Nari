@@ -614,8 +614,8 @@ class Dia:
         """Generates audio from a text prompt in a streaming fashion.
 
         This method produces audio in chunks, making it suitable for real-time
-        applications. It uses a token buffer and an overlap mechanism to ensure
-        smooth transitions between audio chunks, minimizing artifacts.
+        applications. It processes the entire context through the vocoder for
+        better quality, then yields only the new audio portion.
 
         Args:
             text: The input text prompt to synthesize.
@@ -632,8 +632,8 @@ class Dia:
                           the generation on a specific voice or style.
             chunk_size: The number of new audio tokens to generate before yielding
                         an audio chunk.
-            overlap: The number of tokens from the end of the previous chunk to use
-                     as context for the current chunk, preventing discontinuities.
+            overlap: The overlap parameter is kept for compatibility but the approach
+                     now uses full context processing instead of token-level overlap.
             verbose: If True, prints progress and timing information to the console.
 
         Yields:
@@ -683,14 +683,14 @@ class Dia:
         finished_step_Bx = torch.full((batch_size,), -1, dtype=torch.long, device=self.device)
 
         bos_over = False
-        # Simplified: no overlap for now, just focus on getting chunks right
+        # Track audio position for streaming
+        audio_samples_yielded = 0
         last_yield_step = dec_step
 
         if verbose:
             print("generate: starting generation loop")
             if use_torch_compile:
                 print("generate: using use_torch_compile=True, the first step may be slow")
-            start_time = time.time()
 
         # --- Generation Loop ---
         while dec_step < max_tokens:
@@ -749,59 +749,56 @@ class Dia:
 
             dec_step += 1
 
-            # Check if we have enough new tokens to yield a chunk
             if current_step_idx - last_yield_step >= chunk_size:
-                # Get the tokens for this chunk (no overlap, just the new tokens)
-                tokens_to_process = dec_output.generated_tokens[0, last_yield_step:current_step_idx, :]
+                # Give the vocoder full context
+                all_tokens = dec_output.generated_tokens[0, :current_step_idx, :]
 
-                # Create output buffer following the same pattern as generate()
-                chunk_len = tokens_to_process.shape[0]
+                total_len = all_tokens.shape[0]
                 num_channels = self.config.decoder_config.num_channels
                 generated_codes = torch.full(
-                    (batch_size, chunk_len, num_channels),
+                    (batch_size, total_len, num_channels),
                     fill_value=audio_pad_value,
                     dtype=torch.long,
                     device=self.device,
                 )
-                generated_codes[0, :chunk_len, :] = tokens_to_process
+                generated_codes[0, :total_len, :] = all_tokens
 
-                # Calculate length (all tokens are valid for this chunk)
-                lengths_Bx = torch.tensor([chunk_len], device=self.device)
+                lengths_Bx = torch.tensor([total_len], device=self.device)
 
-                # Use the same function as non-streaming
                 audio_chunks = self._generate_output(generated_codes, lengths_Bx)
-                audio_chunk = audio_chunks[0]  # Extract single item
+                full_audio = audio_chunks[0]
 
-                if audio_chunk.size > 0:
-                    yield audio_chunk
+                if full_audio.size > 0:
+                    new_audio = full_audio[audio_samples_yielded:]
+                    if new_audio.size > 0:
+                        yield new_audio
+                        audio_samples_yielded = len(full_audio)
 
                 last_yield_step = current_step_idx
 
         # Process any remaining tokens after the loop finishes
         if current_step_idx > last_yield_step:
-            # Get the remaining tokens (no overlap, just the new tokens)
-            tokens_to_process = dec_output.generated_tokens[0, last_yield_step:current_step_idx, :]
+            all_tokens = dec_output.generated_tokens[0, :current_step_idx, :]
 
-            # Create output buffer following the same pattern as generate()
-            chunk_len = tokens_to_process.shape[0]
+            total_len = all_tokens.shape[0]
             num_channels = self.config.decoder_config.num_channels
             generated_codes = torch.full(
-                (batch_size, chunk_len, num_channels),
+                (batch_size, total_len, num_channels),
                 fill_value=audio_pad_value,
                 dtype=torch.long,
                 device=self.device,
             )
-            generated_codes[0, :chunk_len, :] = tokens_to_process
+            generated_codes[0, :total_len, :] = all_tokens
 
-            # Calculate length (all tokens are valid for this chunk)
-            lengths_Bx = torch.tensor([chunk_len], device=self.device)
+            lengths_Bx = torch.tensor([total_len], device=self.device)
 
-            # Use the same function as non-streaming
             audio_chunks = self._generate_output(generated_codes, lengths_Bx)
-            audio_chunk = audio_chunks[0]  # Extract single item
+            full_audio = audio_chunks[0]
 
-            if audio_chunk.size > 0:
-                yield audio_chunk
+            if full_audio.size > 0:
+                new_audio = full_audio[audio_samples_yielded:]
+                if new_audio.size > 0:
+                    yield new_audio
 
     @torch.inference_mode()
     def generate(
