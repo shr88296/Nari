@@ -638,7 +638,8 @@ class Dia:
         Yields:
             np.ndarray: A chunk of the generated audio waveform as a NumPy array.
         """
-        batch_size = 1
+        batch_size = len(text) if isinstance(text, list) else 1
+        print(f"batch_size: {batch_size}")
         audio_eos_value = self.config.eos_token_id
         audio_pad_value = self.config.pad_token_id
         delay_pattern = self.config.delay_pattern
@@ -679,6 +680,11 @@ class Dia:
         finished_step_Bx = torch.full((batch_size,), -1, dtype=torch.long, device=self.device)
 
         bos_over = False
+        if verbose:
+            print("generate: starting generation loop")
+            if use_torch_compile:
+                print("generate: using use_torch_compile=True, the first step may be slow")
+            start_time = time.time()
         # Track audio position for streaming
         audio_samples_yielded = 0
         last_yield_step = dec_step
@@ -752,10 +758,11 @@ class Dia:
                         f"generate step {dec_step}: speed={86 * batch_size / duration:.3f} tokens/s, realtime factor={batch_size / duration:.3f}x"
                     )
                 start_time = time.time()
-                
+
             if current_step_idx - last_yield_step >= chunk_size:
-                # Give the vocoder full context
-                all_tokens = dec_output.generated_tokens[0, :current_step_idx, :]
+                # TODO: This allows just for 1 batch item.
+                prefill_start = dec_output.prefill_steps[0]
+                all_tokens = dec_output.generated_tokens[0, prefill_start:current_step_idx, :]
 
                 total_len = all_tokens.shape[0]
                 num_channels = self.config.decoder_config.num_channels
@@ -782,7 +789,8 @@ class Dia:
 
         # Process any remaining tokens after the loop finishes
         if current_step_idx > last_yield_step:
-            all_tokens = dec_output.generated_tokens[0, :current_step_idx, :]
+            prefill_start = dec_output.prefill_steps[0]
+            all_tokens = dec_output.generated_tokens[0, prefill_start:current_step_idx, :]
 
             total_len = all_tokens.shape[0]
             num_channels = self.config.decoder_config.num_channels
