@@ -745,6 +745,14 @@ class Dia:
 
             dec_step += 1
 
+            if verbose and dec_step % 86 == 0:
+                duration = time.time() - start_time
+                if duration > 0:
+                    print(
+                        f"generate step {dec_step}: speed={86 * batch_size / duration:.3f} tokens/s, realtime factor={batch_size / duration:.3f}x"
+                    )
+                start_time = time.time()
+                
             if current_step_idx - last_yield_step >= chunk_size:
                 # Give the vocoder full context
                 all_tokens = dec_output.generated_tokens[0, :current_step_idx, :]
