@@ -1,6 +1,6 @@
 import time
 from enum import Enum
-from typing import Callable, Generator, List, Optional, Tuple, Union
+from typing import Callable, Generator
 
 import numpy as np
 import torch
