@@ -24,6 +24,6 @@ for chunk in model.generate_streaming(
 if full_audio:
     final_audio_np = np.concatenate(full_audio, axis=0)
     model.save_audio("test_streaming.mp3", final_audio_np)
-    print("\nStandard streaming test finished. Audio saved to test_streaming_standard.mp3\n")
+    print("\nStandard streaming test finished. Audio saved to test_streaming.mp3\n")
 else:
     print("\nStandard streaming test produced no audio.\n")
