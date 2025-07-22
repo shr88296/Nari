@@ -755,7 +755,9 @@ class Dia:
 
             if current_step_idx - last_yield_step >= chunk_size:
                 prefill_start = dec_output.prefill_steps
-                all_tokens = [dec_output.generated_tokens[i, prefill_start[i]:current_step_idx, :] for i in range(batch_size)]
+                all_tokens = [
+                    dec_output.generated_tokens[i, prefill_start[i] : current_step_idx, :] for i in range(batch_size)
+                ]
                 total_lens = [tokens.shape[0] for tokens in all_tokens]
                 num_channels = self.config.decoder_config.num_channels
                 generated_codes = torch.full(
@@ -765,13 +767,13 @@ class Dia:
                     device=self.device,
                 )
                 for i in range(batch_size):
-                    generated_codes[i, :total_lens[i], :] = all_tokens[i]
+                    generated_codes[i, : total_lens[i], :] = all_tokens[i]
                 lengths_Bx = torch.tensor(total_lens, device=self.device)
                 audio_chunks = self._generate_output(generated_codes, lengths_Bx)
                 new_audios = []
                 for i, full_audio in enumerate(audio_chunks):
                     if full_audio.size > 0:
-                        new_audio = full_audio[audio_samples_yielded[i]:]
+                        new_audio = full_audio[audio_samples_yielded[i] :]
                         if new_audio.size > 0:
                             new_audios.append(new_audio)
                             audio_samples_yielded[i] = len(full_audio)
@@ -784,7 +786,9 @@ class Dia:
 
         if current_step_idx > last_yield_step:
             prefill_start = dec_output.prefill_steps
-            all_tokens = [dec_output.generated_tokens[i, prefill_start[i]:current_step_idx, :] for i in range(batch_size)]
+            all_tokens = [
+                dec_output.generated_tokens[i, prefill_start[i] : current_step_idx, :] for i in range(batch_size)
+            ]
             total_lens = [tokens.shape[0] for tokens in all_tokens]
             num_channels = self.config.decoder_config.num_channels
             generated_codes = torch.full(
@@ -794,13 +798,13 @@ class Dia:
                 device=self.device,
             )
             for i in range(batch_size):
-                generated_codes[i, :total_lens[i], :] = all_tokens[i]
+                generated_codes[i, : total_lens[i], :] = all_tokens[i]
             lengths_Bx = torch.tensor(total_lens, device=self.device)
             audio_chunks = self._generate_output(generated_codes, lengths_Bx)
             new_audios = []
             for i, full_audio in enumerate(audio_chunks):
                 if full_audio.size > 0:
-                    new_audio = full_audio[audio_samples_yielded[i]:]
+                    new_audio = full_audio[audio_samples_yielded[i] :]
                     if new_audio.size > 0:
                         new_audios.append(new_audio)
                     else:
