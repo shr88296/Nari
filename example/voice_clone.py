@@ -16,7 +16,7 @@ clone_from_audio = "simple.mp3"
 # clone_from_audio = "your_audio_name.mp3"
 
 # Text to generate
-text_to_generate = "This is an example of a voice clone with just one speaker."
+text_to_generate = "[S1] Hello, how are you? [S2] I'm good, thank you. [S1] What's your name? [S2] My name is Dia. [S1] Nice to meet you. [S2] Nice to meet you too."
 
 print("--- Running Test Case 1: Standard Generation with voice clone ---")
 # It will only return the audio from the text_to_generate
