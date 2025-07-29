@@ -1,0 +1,10 @@
+# Core PyTorch dependencies
+torch
+torchvision
+torchaudio
+
+# Gradio for demo interface
+gradio
+
+# Audio processing
+soundfile
